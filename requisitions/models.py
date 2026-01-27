@@ -107,3 +107,121 @@ class VendorRequisitionItem(models.Model):
 
     def __str__(self):
         return f"{self.assignment} - {self.product.item_name}"
+
+
+class VendorQuotation(models.Model):
+    """Vendor Quotation for assigned requisition"""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    assignment = models.ForeignKey(
+        VendorRequisitionAssignment,
+        on_delete=models.PROTECT,
+        related_name='quotations',
+        help_text="Reference to vendor assignment"
+    )
+    quotation_number = models.CharField(
+        max_length=50,
+        unique=True,
+        editable=False,
+        help_text="Auto-generated: VQ/YEAR/NUMBER"
+    )
+    quotation_date = models.DateField(auto_now_add=True)
+    reference_number = models.CharField(
+        max_length=100,
+        blank=True,
+        help_text="Vendor's quotation reference number"
+    )
+    validity_date = models.DateField(
+        null=True,
+        blank=True,
+        help_text="Quotation validity date"
+    )
+    payment_terms = models.CharField(max_length=200, blank=True)
+    delivery_terms = models.CharField(max_length=200, blank=True)
+    remarks = models.TextField(blank=True)
+    total_amount = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        default=0,
+        help_text="Total quotation amount (without tax)"
+    )
+    is_selected = models.BooleanField(
+        default=False,
+        help_text="Whether this quotation is selected for PO"
+    )
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        help_text="User who created the quotation"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'vendor_quotations'
+        ordering = ['-quotation_number']
+        verbose_name = 'Vendor Quotation'
+        verbose_name_plural = 'Vendor Quotations'
+
+    def save(self, *args, **kwargs):
+        if not self.quotation_number:
+            year = datetime.now().year
+            last_q = VendorQuotation.objects.filter(
+                quotation_number__startswith=f'VQ/{year}/'
+            ).order_by('-quotation_number').first()
+
+            if last_q:
+                last_num = int(last_q.quotation_number.split('/')[-1])
+                new_num = last_num + 1
+            else:
+                new_num = 1
+
+            self.quotation_number = f'VQ/{year}/{new_num:04d}'
+
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.quotation_number} - {self.assignment.vendor.vendor_name}"
+
+
+
+class VendorQuotationItem(models.Model):
+    """Items in vendor quotation with rates (NO TAX - tax added in PO/billing)"""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    quotation = models.ForeignKey(
+        VendorQuotation,
+        on_delete=models.CASCADE,
+        related_name='items'
+    )
+    vendor_item = models.ForeignKey(
+        VendorRequisitionItem,
+        on_delete=models.PROTECT,
+        help_text="Reference to assigned item"
+    )
+    product = models.ForeignKey(Product, on_delete=models.PROTECT)
+    quantity = models.DecimalField(max_digits=10, decimal_places=2)
+    quoted_rate = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        help_text="Rate quoted by vendor per unit (without tax)"
+    )
+    amount = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        help_text="quantity × quoted_rate (without tax)"
+    )
+    remarks = models.TextField(blank=True)
+
+    class Meta:
+        db_table = 'vendor_quotation_items'
+        verbose_name = 'Quotation Item'
+        verbose_name_plural = 'Quotation Items'
+
+    def save(self, *args, **kwargs):
+        # Auto-calculate amount (no tax)
+        self.amount = self.quantity * self.quoted_rate
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.quotation.quotation_number} - {self.product.item_name}"
