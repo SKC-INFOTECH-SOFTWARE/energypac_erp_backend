@@ -2,6 +2,11 @@ from django.contrib import admin
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from rest_framework_simplejwt.views import TokenRefreshView
+from drf_spectacular.views import (
+    SpectacularAPIView,
+    SpectacularSwaggerView,
+    SpectacularRedocView,
+)
 
 # Import views
 from accounts.views import LoginView, ProfileView
@@ -10,7 +15,7 @@ from vendors.views import VendorViewSet
 from requisitions.views import RequisitionViewSet, VendorAssignmentViewSet
 
 # Create router
-router = DefaultRouter()
+router = DefaultRouter(trailing_slash=False)
 router.register(r'products', ProductViewSet, basename='product')
 router.register(r'vendors', VendorViewSet, basename='vendor')
 router.register(r'requisitions', RequisitionViewSet, basename='requisition')
@@ -26,4 +31,9 @@ urlpatterns = [
 
     # All API endpoints
     path('api/', include(router.urls)),
+
+    # OpenAPI schema
+    path('api/schema/', SpectacularAPIView.as_view(), name='schema'),
+    path('api/docs', SpectacularSwaggerView.as_view(url_name='schema')),
+    path('api/playground', SpectacularRedocView.as_view(url_name='schema')),
 ]

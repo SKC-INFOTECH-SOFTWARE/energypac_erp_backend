@@ -3,6 +3,7 @@ from .models import (Requisition, RequisitionItem,
                      VendorRequisitionAssignment, VendorRequisitionItem)
 from inventory.serializers import ProductSerializer
 from vendors.serializers import VendorSerializer
+from vendors.models import Vendor  # FIXED: Added missing import
 
 class RequisitionItemSerializer(serializers.ModelSerializer):
     """Serializer for requisition items"""
@@ -104,6 +105,10 @@ class VendorAssignmentCreateSerializer(serializers.Serializer):
         help_text="List of items with requisition_item and quantity"
     )
 
+    def to_representation(self, instance):
+        """Return the created assignment using VendorRequisitionAssignmentSerializer"""
+        return VendorRequisitionAssignmentSerializer(instance).data
+
     def validate_requisition(self, value):
         try:
             Requisition.objects.get(id=value)
@@ -113,7 +118,7 @@ class VendorAssignmentCreateSerializer(serializers.Serializer):
 
     def validate_vendor(self, value):
         try:
-            Vendor.objects.get(id=value)
+            Vendor.objects.get(id=value)  # Now this will work!
         except Vendor.DoesNotExist:
             raise serializers.ValidationError("Vendor not found")
         return value
@@ -126,8 +131,21 @@ class VendorAssignmentCreateSerializer(serializers.Serializer):
     def create(self, validated_data):
         items_data = validated_data.pop('items')
 
-        assignment = VendorRequisitionAssignment.objects.create(**validated_data)
+        # Get the actual model instances from UUIDs
+        requisition = Requisition.objects.get(id=validated_data['requisition'])
+        vendor = Vendor.objects.get(id=validated_data['vendor'])
+        assigned_by = validated_data['assigned_by']
+        remarks = validated_data.get('remarks', '')
 
+        # Create assignment with actual instances
+        assignment = VendorRequisitionAssignment.objects.create(
+            requisition=requisition,
+            vendor=vendor,
+            assigned_by=assigned_by,
+            remarks=remarks
+        )
+
+        # Create vendor items
         for item_data in items_data:
             req_item = RequisitionItem.objects.get(id=item_data['requisition_item'])
             VendorRequisitionItem.objects.create(
@@ -138,7 +156,6 @@ class VendorAssignmentCreateSerializer(serializers.Serializer):
             )
 
         # Mark requisition as assigned
-        requisition = Requisition.objects.get(id=validated_data['requisition'])
         requisition.is_assigned = True
         requisition.save()
 
