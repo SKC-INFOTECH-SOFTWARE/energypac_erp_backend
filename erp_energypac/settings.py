@@ -28,6 +28,7 @@ INSTALLED_APPS = [
     'inventory',
     'vendors',
     'requisitions',
+    'purchase_orders',
 ]
 
 MIDDLEWARE = [

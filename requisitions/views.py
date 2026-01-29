@@ -110,6 +110,7 @@ class RequisitionViewSet(viewsets.ModelViewSet):
                 }
                 for item in quotation.items.all():
                     quotation_info['items'].append({
+                        'id': str(item.id),
                         'product_code': item.product.item_code,
                         'product_name': item.product.item_name,
                         'quantity': item.quantity,
@@ -190,7 +191,7 @@ class VendorQuotationViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         serializer.validated_data['created_by'] = self.request.user
-        serializer.save()   
+        serializer.save()
 
     def destroy(self, request, *args, **kwargs):
         return Response(

@@ -14,6 +14,7 @@ from inventory.views import ProductViewSet
 from vendors.views import VendorViewSet
 from requisitions.views import RequisitionViewSet, VendorAssignmentViewSet
 from requisitions.views import VendorQuotationViewSet
+from purchase_orders.views import PurchaseOrderViewSet
 
 # Create router
 router = DefaultRouter(trailing_slash=False)
@@ -22,7 +23,7 @@ router.register(r'vendors', VendorViewSet, basename='vendor')
 router.register(r'requisitions', RequisitionViewSet, basename='requisition')
 router.register(r'vendor-assignments', VendorAssignmentViewSet, basename='vendor-assignment')
 router.register(r'vendor-quotations', VendorQuotationViewSet, basename='vendor-quotation')
-
+router.register(r'purchase-orders', PurchaseOrderViewSet, basename='purchase-order')
 urlpatterns = [
     path('admin/', admin.site.urls),
 
