@@ -159,8 +159,12 @@ class VendorQuotation(models.Model):
     class Meta:
         db_table = 'vendor_quotations'
         ordering = ['-quotation_number']
-        verbose_name = 'Vendor Quotation'
-        verbose_name_plural = 'Vendor Quotations'
+        constraints = [
+            models.UniqueConstraint(
+                fields=['assignment'],
+                name='unique_quotation_per_assignment'
+            )
+        ]
 
     def save(self, *args, **kwargs):
         if not self.quotation_number:

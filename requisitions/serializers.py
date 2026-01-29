@@ -1,4 +1,4 @@
-# requisitions/serializers.py
+
 from rest_framework import serializers
 from .models import (Requisition, RequisitionItem,
                      VendorRequisitionAssignment, VendorRequisitionItem,
@@ -205,7 +205,6 @@ class QuotationItemInputSerializer(serializers.Serializer):
 class VendorQuotationCreateSerializer(serializers.Serializer):
     """
     Serializer for creating vendor quotations
-
     User provides: requisition_id + vendor_id
     System shows: All items from that requisition
     User enters: quoted_rate for each item
@@ -223,7 +222,6 @@ class VendorQuotationCreateSerializer(serializers.Serializer):
     )
 
     def validate(self, data):
-        """Validate that assignment exists for this requisition + vendor combination"""
         try:
             assignment = VendorRequisitionAssignment.objects.get(
                 requisition_id=data['requisition'],
@@ -232,33 +230,32 @@ class VendorQuotationCreateSerializer(serializers.Serializer):
             data['assignment'] = assignment
         except VendorRequisitionAssignment.DoesNotExist:
             raise serializers.ValidationError(
-                "No vendor assignment found for this requisition and vendor combination. "
-                "Please assign the vendor to the requisition first."
+                "Vendor is not assigned to this requisition."
+            )
+        if VendorQuotation.objects.filter(assignment=assignment).exists():
+            raise serializers.ValidationError(
+                "Quotation already exists for this vendor under this requisition."
             )
         return data
 
     def validate_items(self, value):
         if not value:
             raise serializers.ValidationError("At least one item is required")
-
         for item in value:
             if 'vendor_item' not in item:
                 raise serializers.ValidationError("vendor_item is required for each item")
             if 'quoted_rate' not in item:
                 raise serializers.ValidationError("quoted_rate is required for each item")
-
             # Validate vendor_item exists
             try:
                 VendorRequisitionItem.objects.get(id=item['vendor_item'])
             except VendorRequisitionItem.DoesNotExist:
                 raise serializers.ValidationError(f"Vendor item {item['vendor_item']} not found")
-
         return value
 
     def create(self, validated_data):
         items_data = validated_data.pop('items')
         assignment = validated_data.pop('assignment')
-
         # Create quotation
         quotation = VendorQuotation.objects.create(
             assignment=assignment,
@@ -269,15 +266,12 @@ class VendorQuotationCreateSerializer(serializers.Serializer):
             remarks=validated_data.get('remarks', ''),
             created_by=validated_data['created_by']
         )
-
         total_amount = 0
-
         # Create quotation items
         for item_data in items_data:
             vendor_item = VendorRequisitionItem.objects.get(
                 id=item_data['vendor_item']
             )
-
             quotation_item = VendorQuotationItem.objects.create(
                 quotation=quotation,
                 vendor_item=vendor_item,
@@ -286,13 +280,10 @@ class VendorQuotationCreateSerializer(serializers.Serializer):
                 quoted_rate=item_data['quoted_rate'],
                 remarks=item_data.get('remarks', '')
             )
-
             total_amount += quotation_item.amount
-
         # Update quotation total
         quotation.total_amount = total_amount
         quotation.save()
-
         return quotation
 
     def to_representation(self, instance):
@@ -315,7 +306,7 @@ class QuotationItemsForEntrySerializer(serializers.Serializer):
 
 class RequisitionFlowSerializer(serializers.Serializer):
     """Complete flow: Requisition → Vendors → Quotations"""
-    requisition = RequisitionSerializer()
+    requisition = RequisitionSerializer(source='*')
     vendor_assignments = serializers.SerializerMethodField()
 
     def get_vendor_assignments(self, obj):

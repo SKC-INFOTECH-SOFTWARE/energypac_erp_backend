@@ -115,7 +115,7 @@ class RequisitionViewSet(viewsets.ModelViewSet):
                         'quantity': item.quantity,
                         'unit': item.product.unit,
                         'quoted_rate': item.quoted_rate,
-                        'amount': item.final_amount   # Changed as per your request
+                        'amount': item.amount
                     })
                 vendor_info['quotations'].append(quotation_info)
             comparison_data['vendors'].append(vendor_info)
@@ -189,7 +189,8 @@ class VendorQuotationViewSet(viewsets.ModelViewSet):
         return VendorQuotationSerializer
 
     def perform_create(self, serializer):
-        serializer.save(created_by=self.request.user)
+        serializer.validated_data['created_by'] = self.request.user
+        serializer.save()   
 
     def destroy(self, request, *args, **kwargs):
         return Response(
