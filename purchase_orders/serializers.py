@@ -7,11 +7,12 @@ from collections import defaultdict
 class PurchaseOrderItemSerializer(serializers.ModelSerializer):
     product_name = serializers.CharField(source='product.item_name', read_only=True)
     product_code = serializers.CharField(source='product.item_code', read_only=True)
+    hsn_code = serializers.CharField(source='product.hsn_code', read_only=True)
     unit = serializers.CharField(source='product.unit', read_only=True)
 
     class Meta:
         model = PurchaseOrderItem
-        fields = ['id', 'product', 'product_name', 'product_code', 'unit',
+        fields = ['id', 'product', 'product_name', 'product_code', 'hsn_code', 'unit',
                   'quantity', 'rate', 'amount', 'is_received']
         read_only_fields = ['id', 'amount']
 
