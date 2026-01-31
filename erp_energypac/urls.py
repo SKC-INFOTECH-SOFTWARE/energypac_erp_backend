@@ -15,6 +15,28 @@ from vendors.views import VendorViewSet
 from requisitions.views import RequisitionViewSet, VendorAssignmentViewSet
 from requisitions.views import VendorQuotationViewSet
 from purchase_orders.views import PurchaseOrderViewSet
+from dashboard.views import DashboardStatsView
+from reports.views import (
+    # Requisition Reports
+    RequisitionReportView,
+    RequisitionDetailedReportView,
+
+    # Vendor Reports
+    VendorPerformanceReportView,
+    VendorQuotationComparisonReportView,
+
+    # Purchase Order Reports
+    PurchaseOrderReportView,
+
+    # Inventory Reports
+    InventoryStockReportView,
+    InventoryMovementReportView,
+
+    # Financial Reports
+    SpendingAnalysisReportView,
+)
+
+
 
 # Create router
 router = DefaultRouter(trailing_slash=False)
@@ -34,9 +56,47 @@ urlpatterns = [
 
     # All API endpoints
     path('api/', include(router.urls)),
+    path('api/dashboard/stats', DashboardStatsView.as_view(), name='dashboard-stats'),
 
     # OpenAPI schema
     path('api/schema/', SpectacularAPIView.as_view(), name='schema'),
     path('api/docs', SpectacularSwaggerView.as_view(url_name='schema')),
     path('api/playground', SpectacularRedocView.as_view(url_name='schema')),
+
+# ===== REQUISITION REPORTS =====
+    path('api/reports/requisitions',
+         RequisitionReportView.as_view(),
+         name='report-requisitions'),
+
+    path('api/reports/requisitions/<uuid:pk>/detailed',
+         RequisitionDetailedReportView.as_view(),
+         name='report-requisition-detailed'),
+
+    # ===== VENDOR REPORTS =====
+    path('api/reports/vendors/performance',
+         VendorPerformanceReportView.as_view(),
+         name='report-vendor-performance'),
+
+    path('api/reports/vendors/quotation-comparison',
+         VendorQuotationComparisonReportView.as_view(),
+         name='report-quotation-comparison'),
+
+    # ===== PURCHASE ORDER REPORTS =====
+    path('api/reports/purchase-orders',
+         PurchaseOrderReportView.as_view(),
+         name='report-purchase-orders'),
+
+    # ===== INVENTORY REPORTS =====
+    path('api/reports/inventory/stock',
+         InventoryStockReportView.as_view(),
+         name='report-inventory-stock'),
+
+    path('api/reports/inventory/movement',
+         InventoryMovementReportView.as_view(),
+         name='report-inventory-movement'),
+
+    # ===== FINANCIAL REPORTS =====
+    path('api/reports/financial/spending',
+         SpendingAnalysisReportView.as_view(),
+         name='report-spending-analysis'),
 ]

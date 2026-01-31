@@ -1,0 +1,48 @@
+# ===============================
+# PYTHON
+# ===============================
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# ===============================
+# DJANGO
+# ===============================
+*.log
+local_settings.py
+db.sqlite3
+media/
+staticfiles/
+
+# ===============================
+# ENV FILES
+# ===============================
+.env
+
+# ===============================
+# IDE / EDITOR
+# ===============================
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ===============================
+# OS FILES
+# ===============================
+.DS_Store
+Thumbs.db
+
+# ===============================
+# MIGRATIONS (optional)
+# Uncomment if you don't want migrations
+# ===============================
+# **/migrations/
+# !**/migrations/__init__.py
