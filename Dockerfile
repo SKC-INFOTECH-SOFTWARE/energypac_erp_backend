@@ -38,11 +38,10 @@ COPY . .
 # Switch to non-root user
 USER appuser
 
-EXPOSE 8000
+EXPOSE 4000
 
 CMD gunicorn erp_energypac.wsgi:application \
-    --bind 0.0.0.0:8000 \
+    --bind 0.0.0.0:4000 \
     --workers 2 \
     --timeout 120 \
     --log-level debug
-
