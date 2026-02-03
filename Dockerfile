@@ -27,9 +27,9 @@ RUN adduser \
     appuser
 
 # Install Python deps
-RUN --mount=type=cache,target=/root/.cache/pip \
-    --mount=type=bind,source=requirements.txt,target=requirements.txt \
-    python -m pip install --upgrade pip && \
+COPY requirements.txt .
+
+RUN python -m pip install --upgrade pip && \
     python -m pip install -r requirements.txt
 
 # Copy source
