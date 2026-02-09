@@ -35,6 +35,11 @@ from reports.views import (
     # Financial Reports
     SpendingAnalysisReportView,
 )
+from sales.views import (
+    ClientQueryViewSet,
+    SalesQuotationViewSet,
+    SalesQuotationItemViewSet
+)
 
 
 
@@ -46,6 +51,9 @@ router.register(r'requisitions', RequisitionViewSet, basename='requisition')
 router.register(r'vendor-assignments', VendorAssignmentViewSet, basename='vendor-assignment')
 router.register(r'vendor-quotations', VendorQuotationViewSet, basename='vendor-quotation')
 router.register(r'purchase-orders', PurchaseOrderViewSet, basename='purchase-order')
+router.register(r'client-queries', ClientQueryViewSet, basename='client-query')
+router.register(r'quotations', SalesQuotationViewSet, basename='sales-quotation')
+router.register(r'quotation-items', SalesQuotationItemViewSet, basename='quotation-item')
 urlpatterns = [
     path('admin/', admin.site.urls),
 
@@ -57,6 +65,7 @@ urlpatterns = [
     # All API endpoints
     path('api/', include(router.urls)),
     path('api/dashboard/stats', DashboardStatsView.as_view(), name='dashboard-stats'),
+    path('api/sales/', include(router.urls)),
 
     # OpenAPI schema
     path('api/schema/', SpectacularAPIView.as_view(), name='schema'),

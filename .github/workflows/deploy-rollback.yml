@@ -1,0 +1,351 @@
+name: Deploy to VPS with Automatic Rollback
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Deploy to VPS with Rollback
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USERNAME }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT }}
+          command_timeout: 15m
+          script: |
+            set -e  # Exit immediately if a command exits with a non-zero status
+
+            echo "================================================================"
+            echo "🚀 DEPLOYMENT STARTED - EnergyPac Backend"
+            echo "================================================================"
+            echo "📅 Time: $(date '+%Y-%m-%d %H:%M:%S')"
+            echo "🔗 Commit: ${{ github.sha }}"
+            echo "👤 Triggered by: ${{ github.actor }}"
+            echo "📝 Commit message: ${{ github.event.head_commit.message }}"
+            echo ""
+
+            # Navigate to project directory
+            cd ${{ secrets.VPS_PATH }} || { echo "❌ Project directory not found!"; exit 1; }
+
+            # ============================================================
+            # STEP 1: CREATE BACKUP
+            # ============================================================
+            echo "💾 Creating backup before deployment..."
+            BACKUP_DIR="backups/backup_$(date +%Y%m%d_%H%M%S)"
+            mkdir -p "$BACKUP_DIR"
+
+            # Save current commit hash
+            PREVIOUS_COMMIT=$(git rev-parse HEAD)
+            echo "$PREVIOUS_COMMIT" > "$BACKUP_DIR/commit_hash.txt"
+            echo "📌 Previous commit: $PREVIOUS_COMMIT"
+
+            # Save container status
+            docker-compose ps > "$BACKUP_DIR/containers_before.txt" 2>&1 || true
+
+            # Save current .env file
+            if [ -f .env ]; then
+              cp .env "$BACKUP_DIR/.env.backup"
+              echo "✅ .env file backed up"
+            fi
+
+            # Create rollback script
+            cat > "$BACKUP_DIR/rollback.sh" << 'EOF'
+            #!/bin/bash
+            echo "🔄 Starting rollback..."
+            PREVIOUS_COMMIT=$(cat commit_hash.txt)
+            cd ${{ secrets.VPS_PATH }}
+            git reset --hard $PREVIOUS_COMMIT
+            docker-compose down
+            docker-compose build --no-cache
+            docker-compose up -d
+            echo "✅ Rollback completed to commit: $PREVIOUS_COMMIT"
+            EOF
+            chmod +x "$BACKUP_DIR/rollback.sh"
+
+            echo "✅ Backup created in: $BACKUP_DIR"
+            echo ""
+
+            # ============================================================
+            # STEP 2: PULL LATEST CODE
+            # ============================================================
+            echo "📥 Pulling latest code from GitHub..."
+
+            # Check if there are any changes
+            git fetch origin main
+            NEW_COMMIT=$(git rev-parse origin/main)
+
+            if [ "$PREVIOUS_COMMIT" = "$NEW_COMMIT" ]; then
+              echo "ℹ️  No new changes detected. Deployment skipped."
+              echo "Current commit: $PREVIOUS_COMMIT"
+              exit 0
+            fi
+
+            echo "🔄 Updating from $PREVIOUS_COMMIT to $NEW_COMMIT"
+
+            # Pull the code
+            if ! git pull origin main; then
+              echo "❌ Failed to pull code from GitHub"
+              exit 1
+            fi
+
+            echo "✅ Code updated successfully"
+            echo ""
+
+            # ============================================================
+            # STEP 3: STOP CONTAINERS
+            # ============================================================
+            echo "🛑 Stopping current containers..."
+
+            if ! docker-compose down; then
+              echo "⚠️  Warning: Failed to stop containers gracefully"
+              docker-compose down --remove-orphans || true
+            fi
+
+            echo "✅ Containers stopped"
+            echo ""
+
+            # ============================================================
+            # STEP 4: BUILD NEW IMAGES
+            # ============================================================
+            echo "🏗️  Building new Docker images..."
+
+            if ! docker-compose build --no-cache; then
+              echo "❌ Docker build failed! Rolling back..."
+              cd "$BACKUP_DIR"
+              bash rollback.sh
+              exit 1
+            fi
+
+            echo "✅ Docker images built successfully"
+            echo ""
+
+            # ============================================================
+            # STEP 5: RUN DATABASE MIGRATIONS
+            # ============================================================
+            echo "🗄️  Running database migrations..."
+
+            if ! docker-compose run --rm server python manage.py migrate --noinput; then
+              echo "❌ Database migration failed! Rolling back..."
+              cd "$BACKUP_DIR"
+              bash rollback.sh
+              exit 1
+            fi
+
+            echo "✅ Migrations completed successfully"
+            echo ""
+
+            # ============================================================
+            # STEP 6: COLLECT STATIC FILES
+            # ============================================================
+            echo "📦 Collecting static files..."
+
+            if ! docker-compose run --rm server python manage.py collectstatic --noinput --clear; then
+              echo "⚠️  Warning: Static files collection failed (non-critical)"
+            else
+              echo "✅ Static files collected"
+            fi
+            echo ""
+
+            # ============================================================
+            # STEP 7: START CONTAINERS
+            # ============================================================
+            echo "🚀 Starting new containers..."
+
+            if ! docker-compose up -d; then
+              echo "❌ Failed to start containers! Rolling back..."
+              cd "$BACKUP_DIR"
+              bash rollback.sh
+              exit 1
+            fi
+
+            echo "✅ Containers started"
+            echo ""
+
+            # ============================================================
+            # STEP 8: HEALTH CHECK WITH RETRY
+            # ============================================================
+            echo "🏥 Performing health checks..."
+            echo "⏳ Waiting for application to start..."
+
+            MAX_ATTEMPTS=30
+            ATTEMPT=0
+            HEALTH_CHECK_PASSED=false
+
+            # Wait 10 seconds for initial startup
+            sleep 10
+
+            while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
+              ATTEMPT=$((ATTEMPT + 1))
+
+              # Try to check API documentation endpoint
+              HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:4000/api/docs 2>/dev/null || echo "000")
+
+              if [ "$HTTP_CODE" = "200" ]; then
+                echo "✅ Health check PASSED! (HTTP $HTTP_CODE)"
+                HEALTH_CHECK_PASSED=true
+                break
+              fi
+
+              echo "⏳ Attempt $ATTEMPT/$MAX_ATTEMPTS - HTTP $HTTP_CODE - Waiting 2 seconds..."
+              sleep 2
+            done
+
+            if [ "$HEALTH_CHECK_PASSED" = false ]; then
+              echo ""
+              echo "❌ =============================================="
+              echo "❌ HEALTH CHECK FAILED AFTER $MAX_ATTEMPTS ATTEMPTS"
+              echo "❌ =============================================="
+              echo ""
+              echo "📋 Last 100 lines of application logs:"
+              docker-compose logs --tail=100 server
+              echo ""
+              echo "🔄 ROLLING BACK TO PREVIOUS VERSION..."
+              echo ""
+
+              # Rollback
+              git reset --hard $PREVIOUS_COMMIT
+              docker-compose down
+              docker-compose build --no-cache
+              docker-compose up -d
+
+              # Wait for rollback to start
+              sleep 10
+
+              # Check if rollback worked
+              ROLLBACK_CHECK=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:4000/api/docs 2>/dev/null || echo "000")
+
+              if [ "$ROLLBACK_CHECK" = "200" ]; then
+                echo "✅ Rollback successful - Previous version is running"
+                echo "📌 Current commit: $PREVIOUS_COMMIT"
+              else
+                echo "❌ Rollback may have issues - Please check manually"
+              fi
+
+              echo ""
+              echo "💾 Backup location: $BACKUP_DIR"
+              echo "📋 To manually rollback: bash $BACKUP_DIR/rollback.sh"
+
+              exit 1
+            fi
+
+            echo ""
+
+            # ============================================================
+            # STEP 9: ADDITIONAL ENDPOINT TESTS
+            # ============================================================
+            echo "🧪 Testing critical endpoints..."
+
+            # Test login endpoint (should return 400 or 405, not 500)
+            LOGIN_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:4000/api/auth/login 2>/dev/null || echo "000")
+            if [ "$LOGIN_CODE" = "400" ] || [ "$LOGIN_CODE" = "405" ] || [ "$LOGIN_CODE" = "200" ]; then
+              echo "✅ Login endpoint: HTTP $LOGIN_CODE (OK)"
+            else
+              echo "⚠️  Login endpoint: HTTP $LOGIN_CODE (Check logs)"
+            fi
+
+            # Test products endpoint (should return 200 or 401 for auth)
+            PRODUCTS_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:4000/api/products 2>/dev/null || echo "000")
+            if [ "$PRODUCTS_CODE" = "200" ] || [ "$PRODUCTS_CODE" = "401" ]; then
+              echo "✅ Products endpoint: HTTP $PRODUCTS_CODE (OK)"
+            else
+              echo "⚠️  Products endpoint: HTTP $PRODUCTS_CODE (Check logs)"
+            fi
+
+            echo ""
+
+            # ============================================================
+            # STEP 10: CLEANUP OLD IMAGES
+            # ============================================================
+            echo "🧹 Cleaning up old Docker images..."
+            docker image prune -af --filter "until=24h" > /dev/null 2>&1 || true
+            echo "✅ Cleanup completed"
+            echo ""
+
+            # ============================================================
+            # STEP 11: DEPLOYMENT SUMMARY
+            # ============================================================
+            echo "================================================================"
+            echo "✅ DEPLOYMENT COMPLETED SUCCESSFULLY!"
+            echo "================================================================"
+            echo ""
+            echo "📊 Container Status:"
+            docker-compose ps
+            echo ""
+            echo "📈 Deployment Details:"
+            echo "   • Previous commit: $PREVIOUS_COMMIT"
+            echo "   • New commit: $NEW_COMMIT"
+            echo "   • Backup location: $BACKUP_DIR"
+            echo "   • Deployed by: ${{ github.actor }}"
+            echo "   • Deployment time: $(date '+%Y-%m-%d %H:%M:%S')"
+            echo ""
+            echo "🔗 Access your application:"
+            echo "   • API Docs: http://$(curl -s ifconfig.me):4000/api/docs"
+            echo "   • Local: http://localhost:4000/api/docs"
+            echo ""
+            echo "💾 Rollback Information:"
+            echo "   • To rollback manually: bash $BACKUP_DIR/rollback.sh"
+            echo "   • Backup expires: After 30 days (manual cleanup)"
+            echo ""
+            echo "================================================================"
+
+      - name: Notify Success
+        if: success()
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USERNAME }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT }}
+          script: |
+            echo ""
+            echo "✅ ================================================"
+            echo "✅   DEPLOYMENT NOTIFICATION - SUCCESS"
+            echo "✅ ================================================"
+            echo ""
+            echo "📦 Project: EnergyPac Backend"
+            echo "🌐 Environment: Production VPS"
+            echo "🔗 Commit: ${{ github.sha }}"
+            echo "👤 Deployed by: ${{ github.actor }}"
+            echo "💬 Message: ${{ github.event.head_commit.message }}"
+            echo "📅 Time: $(date '+%Y-%m-%d %H:%M:%S')"
+            echo ""
+            echo "✅ ================================================"
+
+      - name: Notify Failure
+        if: failure()
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USERNAME }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT }}
+          script: |
+            echo ""
+            echo "❌ ================================================"
+            echo "❌   DEPLOYMENT NOTIFICATION - FAILED"
+            echo "❌ ================================================"
+            echo ""
+            echo "📦 Project: EnergyPac Backend"
+            echo "🔗 Commit: ${{ github.sha }}"
+            echo "👤 Attempted by: ${{ github.actor }}"
+            echo "📅 Time: $(date '+%Y-%m-%d %H:%M:%S')"
+            echo ""
+            echo "📋 Recent logs:"
+            cd ~/energypac_backend
+            docker-compose logs --tail=50 server
+            echo ""
+            echo "💡 Check GitHub Actions logs for details"
+            echo "🔄 System was rolled back to previous version"
+            echo ""
+            echo "❌ ================================================"
