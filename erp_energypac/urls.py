@@ -40,6 +40,16 @@ from sales.views import (
     SalesQuotationViewSet,
     SalesQuotationItemViewSet
 )
+from sales.reports_views import (
+    ClientQueryReportView,
+    ClientQueryDetailedReportView,
+    SalesQuotationReportView,
+    QuotationItemsReportView,
+    SalesAnalyticsView,
+    SalesPerformanceView,
+    SalesDashboardStatsView,
+    ProductSalesAnalysisView,
+)
 
 
 
@@ -108,4 +118,37 @@ urlpatterns = [
     path('api/reports/financial/spending',
          SpendingAnalysisReportView.as_view(),
          name='report-spending-analysis'),
+
+    # ===== SALES REPORTS =====
+    path('api/reports/sales/client-queries',
+        ClientQueryReportView.as_view(),
+        name='report-sales-client-queries'),
+
+    path('api/reports/sales/client-queries/<uuid:pk>/detailed',
+        ClientQueryDetailedReportView.as_view(),
+        name='report-sales-client-query-detailed'),
+
+    path('api/reports/sales/quotations',
+        SalesQuotationReportView.as_view(),
+        name='report-sales-quotations'),
+
+    path('api/reports/sales/quotation-items',
+        QuotationItemsReportView.as_view(),
+        name='report-sales-quotation-items'),
+
+    path('api/reports/sales/analytics',
+        SalesAnalyticsView.as_view(),
+        name='report-sales-analytics'),
+
+    path('api/reports/sales/performance',
+        SalesPerformanceView.as_view(),
+        name='report-sales-performance'),
+
+    path('api/reports/sales/products',
+        ProductSalesAnalysisView.as_view(),
+        name='report-sales-products'),
+
+    path('api/dashboard/sales/stats',
+        SalesDashboardStatsView.as_view(),
+        name='dashboard-sales-stats'),
 ]
