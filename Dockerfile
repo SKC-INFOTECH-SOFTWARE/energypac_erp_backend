@@ -8,7 +8,7 @@ ENV PYTHONUNBUFFERED=1
 
 WORKDIR /app
 
-# 🔴 REQUIRED: system deps for mysqlclient
+# Install system dependencies (mysqlclient)
 RUN apt-get update && apt-get install -y \
     build-essential \
     pkg-config \
@@ -28,12 +28,15 @@ RUN adduser \
 
 # Install Python deps
 COPY requirements.txt .
-
 RUN python -m pip install --upgrade pip && \
     python -m pip install -r requirements.txt
 
-# Copy source
+# Copy source code
 COPY . .
+
+# 🔥 IMPORTANT: Create staticfiles directory and give permission
+RUN mkdir -p /app/staticfiles && \
+    chown -R appuser:appuser /app
 
 # Switch to non-root user
 USER appuser
