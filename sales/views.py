@@ -273,6 +273,7 @@ class SalesQuotationViewSet(viewsets.ModelViewSet):
             items_summary.append({
                 'item_name': item.item_name,
                 'item_code': item.item_code,
+                'hsn_code': item.hsn_code,
                 'quantity': float(item.quantity),
                 'unit': item.unit,
                 'rate': float(item.rate),
