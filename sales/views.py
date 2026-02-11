@@ -283,6 +283,10 @@ class SalesQuotationViewSet(viewsets.ModelViewSet):
         return Response({
             'quotation_number': quotation.quotation_number,
             'client_name': quotation.client_query.client_name,
+            'contact_person': quotation.client_query.contact_person,
+            'phone': quotation.client_query.phone,
+            'email': quotation.client_query.email,
+            'address': quotation.client_query.address,
             'quotation_date': quotation.quotation_date,
             'validity_date': quotation.validity_date,
             'items': items_summary,
