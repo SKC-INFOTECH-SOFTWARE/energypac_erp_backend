@@ -7,7 +7,6 @@ from drf_spectacular.views import (
     SpectacularSwaggerView,
     SpectacularRedocView,
 )
-
 # Import views
 from accounts.views import LoginView, ProfileView
 from inventory.views import ProductViewSet
