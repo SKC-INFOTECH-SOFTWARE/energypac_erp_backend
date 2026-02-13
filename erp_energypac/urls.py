@@ -15,6 +15,8 @@ from requisitions.views import RequisitionViewSet, VendorAssignmentViewSet
 from requisitions.views import VendorQuotationViewSet
 from purchase_orders.views import PurchaseOrderViewSet
 from dashboard.views import DashboardStatsView
+from work_orders.views import WorkOrderViewSet
+from billing.views import BillViewSet
 from reports.views import (
     # Requisition Reports
     RequisitionReportView,
@@ -63,6 +65,8 @@ router.register(r'purchase-orders', PurchaseOrderViewSet, basename='purchase-ord
 router.register(r'client-queries', ClientQueryViewSet, basename='client-query')
 router.register(r'quotations', SalesQuotationViewSet, basename='sales-quotation')
 router.register(r'quotation-items', SalesQuotationItemViewSet, basename='quotation-item')
+router.register(r'work-orders', WorkOrderViewSet, basename='work-order')
+router.register(r'bills', BillViewSet, basename='bill')
 urlpatterns = [
     path('admin/', admin.site.urls),
 

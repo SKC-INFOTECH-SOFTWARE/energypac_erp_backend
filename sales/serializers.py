@@ -6,7 +6,6 @@ from django.core.files.storage import default_storage
 import os
 
 class ClientQuerySerializer(serializers.ModelSerializer):
-    """Serializer for Client Query"""
     created_by_name = serializers.CharField(source='created_by.get_full_name', read_only=True)
     quotation_count = serializers.SerializerMethodField()
 
@@ -24,7 +23,6 @@ class ClientQuerySerializer(serializers.ModelSerializer):
         return obj.quotations.count()
 
 class ClientQueryCreateSerializer(serializers.ModelSerializer):
-    """Serializer for creating client query with PDF upload"""
     pdf_upload = serializers.FileField(write_only=True, required=False)
     query_date = serializers.DateField(input_formats=['%Y-%m-%d', '%d-%m-%Y'])
 
@@ -37,28 +35,24 @@ class ClientQueryCreateSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         pdf_file = validated_data.pop('pdf_upload', None)
-        # Create the client query
         client_query = ClientQuery.objects.create(**validated_data)
-        # Handle PDF upload
+
         if pdf_file:
-            # Create directory structure: {BASE_DIR}/client/sales_pdfs/YEAR/
             year = client_query.created_at.year
             upload_dir = os.path.join(settings.BASE_DIR, 'client', 'sales_pdfs', str(year))
-            # Replace '/' in query_number to avoid subdir issues
-            safe_query_number = client_query.query_number.replace('/', '_')
-            file_extension = os.path.splitext(pdf_file.name)[1]
-            filename = f"{safe_query_number}{file_extension}"
+            safe_number = client_query.query_number.replace('/', '_')
+            filename = f"{safe_number}{os.path.splitext(pdf_file.name)[1]}"
             filepath = os.path.join(upload_dir, filename)
-            # Ensure full directory exists
-            os.makedirs(os.path.dirname(filepath), exist_ok=True)
-            # Save the file
+
+            os.makedirs(upload_dir, exist_ok=True)
+
             with open(filepath, 'wb+') as destination:
                 for chunk in pdf_file.chunks():
                     destination.write(chunk)
-            # Update the model with file path (relative path for portability)
-            relative_path = os.path.relpath(filepath, settings.BASE_DIR)
-            client_query.pdf_file = relative_path
+
+            client_query.pdf_file = os.path.relpath(filepath, settings.BASE_DIR)
             client_query.save()
+
         return client_query
 
     def to_representation(self, instance):
@@ -110,13 +104,11 @@ class SalesQuotationItemSerializer(serializers.ModelSerializer):
         return data
 
 class SalesQuotationSerializer(serializers.ModelSerializer):
-    """Serializer for viewing quotations"""
-    items = SalesQuotationItemSerializer(many=True, read_only=True)
+    items = SalesQuotationItemSerializer(many=True)
     client_name = serializers.CharField(source='client_query.client_name', read_only=True)
     query_number = serializers.CharField(source='client_query.query_number', read_only=True)
     created_by_name = serializers.CharField(source='created_by.get_full_name', read_only=True)
     total_items = serializers.SerializerMethodField()
-    # Tax summaries
     total_gst = serializers.SerializerMethodField()
     gst_breakdown = serializers.SerializerMethodField()
 
@@ -146,24 +138,49 @@ class SalesQuotationSerializer(serializers.ModelSerializer):
     def get_gst_breakdown(self, obj):
         breakdown = []
         if obj.cgst_amount > 0:
-            breakdown.append({
-                'type': 'CGST',
-                'percentage': float(obj.cgst_percentage),
-                'amount': float(obj.cgst_amount)
-            })
+            breakdown.append({'type': 'CGST', 'percentage': float(obj.cgst_percentage), 'amount': float(obj.cgst_amount)})
         if obj.sgst_amount > 0:
-            breakdown.append({
-                'type': 'SGST',
-                'percentage': float(obj.sgst_percentage),
-                'amount': float(obj.sgst_amount)
-            })
+            breakdown.append({'type': 'SGST', 'percentage': float(obj.sgst_percentage), 'amount': float(obj.sgst_amount)})
         if obj.igst_amount > 0:
-            breakdown.append({
-                'type': 'IGST',
-                'percentage': float(obj.igst_percentage),
-                'amount': float(obj.igst_amount)
-            })
+            breakdown.append({'type': 'IGST', 'percentage': float(obj.igst_percentage), 'amount': float(obj.igst_amount)})
         return breakdown
+
+    def update(self, instance, validated_data):
+        items_data = validated_data.pop('items', None)
+
+        # Update quotation fields
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        instance.save()
+
+        if items_data is not None:
+            # Get current item IDs
+            existing_ids = {item.id for item in instance.items.all()}
+
+            for item_data in items_data:
+                item_id = item_data.get('id')
+                if item_id:
+                    # Update existing item
+                    try:
+                        item = SalesQuotationItem.objects.get(id=item_id, quotation=instance)
+                        serializer = SalesQuotationItemSerializer(item, data=item_data, partial=True)
+                        serializer.is_valid(raise_exception=True)
+                        serializer.save()
+                        existing_ids.discard(item_id)
+                    except SalesQuotationItem.DoesNotExist:
+                        raise serializers.ValidationError(f"Item {item_id} does not belong to this quotation")
+                else:
+                    # Create new item
+                    serializer = SalesQuotationItemSerializer(data=item_data)
+                    serializer.is_valid(raise_exception=True)
+                    serializer.save(quotation=instance)
+
+            # Delete items that were removed from the list
+            SalesQuotationItem.objects.filter(id__in=existing_ids).delete()
+
+        # Recalculate totals
+        instance.calculate_totals()
+        return instance
 
 class SalesQuotationCreateSerializer(serializers.Serializer):
     """Serializer for creating sales quotation"""

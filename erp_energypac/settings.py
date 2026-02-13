@@ -8,7 +8,7 @@ load_dotenv()
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 SECRET_KEY = 'django-insecure-change-this-in-production'
-DEBUG = False
+DEBUG = True
 ALLOWED_HOSTS = ['*']
 
 # Application definition
@@ -36,6 +36,8 @@ INSTALLED_APPS = [
     'dashboard',
     'reports',
     'sales',
+    'work_orders',
+    'billing',
 ]
 
 MIDDLEWARE = [
