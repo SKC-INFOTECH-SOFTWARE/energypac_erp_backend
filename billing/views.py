@@ -1,8 +1,9 @@
-from rest_framework import viewsets, status, filters
+from rest_framework import viewsets, status, filters, serializers
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from django_filters.rest_framework import DjangoFilterBackend
 from django.db import transaction
+from decimal import Decimal
 
 from .models import Bill, BillItem
 from .serializers import (
@@ -111,7 +112,7 @@ class BillViewSet(viewsets.ModelViewSet):
 
         try:
             amount_paid = Decimal(str(amount_paid))
-        except:
+        except (ValueError, TypeError, Exception):
             return Response(
                 {'error': 'Invalid amount'},
                 status=status.HTTP_400_BAD_REQUEST
