@@ -52,6 +52,17 @@ from sales.reports_views import (
     ProductSalesAnalysisView,
 )
 
+from billing.reports_views import (
+    BillReportView,
+    BillDetailedReportView,
+    BillingAnalyticsView,
+    OutstandingPaymentsReportView,
+    WorkOrderReportView,
+    WorkOrderDetailedReportView,
+    WorkOrderDeliveryAnalysisView,
+    BillingDashboardStatsView,
+)
+
 
 
 # Create router
@@ -154,4 +165,41 @@ urlpatterns = [
     path('api/dashboard/sales/stats',
         SalesDashboardStatsView.as_view(),
         name='dashboard-sales-stats'),
+
+
+
+    # ===== BILLING REPORTS =====
+    path('api/reports/billing/bills',
+        BillReportView.as_view(),
+        name='report-bills'),
+
+    path('api/reports/billing/bills/<uuid:pk>/detailed',
+        BillDetailedReportView.as_view(),
+        name='report-bill-detailed'),
+
+    path('api/reports/billing/analytics',
+        BillingAnalyticsView.as_view(),
+        name='report-billing-analytics'),
+
+    path('api/reports/billing/outstanding',
+        OutstandingPaymentsReportView.as_view(),
+        name='report-outstanding-payments'),
+
+    # ===== WORK ORDER REPORTS =====
+    path('api/reports/work-orders',
+        WorkOrderReportView.as_view(),
+        name='report-work-orders'),
+
+    path('api/reports/work-orders/<uuid:pk>/detailed',
+        WorkOrderDetailedReportView.as_view(),
+        name='report-work-order-detailed'),
+
+    path('api/reports/work-orders/delivery-analysis',
+        WorkOrderDeliveryAnalysisView.as_view(),
+        name='report-work-order-delivery-analysis'),
+
+    # ===== BILLING DASHBOARD =====
+    path('api/dashboard/billing/stats',
+        BillingDashboardStatsView.as_view(),
+        name='dashboard-billing-stats'),
 ]
