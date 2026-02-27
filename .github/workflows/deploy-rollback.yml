@@ -51,7 +51,7 @@ jobs:
             echo "📌 Previous commit: $PREVIOUS_COMMIT"
 
             # Save container status
-            docker-compose ps > "$BACKUP_DIR/containers_before.txt" 2>&1 || true
+            docker compose ps > "$BACKUP_DIR/containers_before.txt" 2>&1 || true
 
             # Save current .env file
             if [ -f .env ]; then
@@ -66,9 +66,9 @@ jobs:
             PREVIOUS_COMMIT=$(cat commit_hash.txt)
             cd ${{ secrets.VPS_PATH }}
             git reset --hard $PREVIOUS_COMMIT
-            docker-compose down
-            docker-compose build --no-cache
-            docker-compose up -d
+            docker compose down
+            docker compose build --no-cache
+            docker compose up -d
             echo "✅ Rollback completed to commit: $PREVIOUS_COMMIT"
             EOF
             chmod +x "$BACKUP_DIR/rollback.sh"
@@ -107,9 +107,9 @@ jobs:
             # ============================================================
             echo "🛑 Stopping current containers..."
 
-            if ! docker-compose down; then
+            if ! docker compose down; then
               echo "⚠️  Warning: Failed to stop containers gracefully"
-              docker-compose down --remove-orphans || true
+              docker compose down --remove-orphans || true
             fi
 
             echo "✅ Containers stopped"
@@ -120,7 +120,7 @@ jobs:
             # ============================================================
             echo "🏗️  Building new Docker images..."
 
-            if ! docker-compose build --no-cache; then
+            if ! docker compose build --no-cache; then
               echo "❌ Docker build failed! Rolling back..."
               cd "$BACKUP_DIR"
               bash rollback.sh
@@ -135,7 +135,7 @@ jobs:
             # ============================================================
             echo "🗄️  Running database migrations..."
 
-            if ! docker-compose run --rm server python manage.py migrate --noinput; then
+            if ! docker compose run --rm server python manage.py migrate --noinput; then
               echo "❌ Database migration failed! Rolling back..."
               cd "$BACKUP_DIR"
               bash rollback.sh
@@ -150,7 +150,7 @@ jobs:
             # ============================================================
             echo "📦 Collecting static files..."
 
-            if ! docker-compose run --rm server python manage.py collectstatic --noinput --clear; then
+            if ! docker compose run --rm server python manage.py collectstatic --noinput --clear; then
               echo "⚠️  Warning: Static files collection failed (non-critical)"
             else
               echo "✅ Static files collected"
@@ -162,7 +162,7 @@ jobs:
             # ============================================================
             echo "🚀 Starting new containers..."
 
-            if ! docker-compose up -d; then
+            if ! docker compose up -d; then
               echo "❌ Failed to start containers! Rolling back..."
               cd "$BACKUP_DIR"
               bash rollback.sh
@@ -208,16 +208,16 @@ jobs:
               echo "❌ =============================================="
               echo ""
               echo "📋 Last 100 lines of application logs:"
-              docker-compose logs --tail=100 server
+              docker compose logs --tail=100 server
               echo ""
               echo "🔄 ROLLING BACK TO PREVIOUS VERSION..."
               echo ""
 
               # Rollback
               git reset --hard $PREVIOUS_COMMIT
-              docker-compose down
-              docker-compose build --no-cache
-              docker-compose up -d
+              docker compose down
+              docker compose build --no-cache
+              docker compose up -d
 
               # Wait for rollback to start
               sleep 10
@@ -280,7 +280,7 @@ jobs:
             echo "================================================================"
             echo ""
             echo "📊 Container Status:"
-            docker-compose ps
+            docker compose ps
             echo ""
             echo "📈 Deployment Details:"
             echo "   • Previous commit: $PREVIOUS_COMMIT"
@@ -342,8 +342,8 @@ jobs:
             echo "📅 Time: $(date '+%Y-%m-%d %H:%M:%S')"
             echo ""
             echo "📋 Recent logs:"
-            cd ~/energypac_backend
-            docker-compose logs --tail=50 server
+            cd ${{ secrets.VPS_PATH }}
+            docker compose logs --tail=50 server
             echo ""
             echo "💡 Check GitHub Actions logs for details"
             echo "🔄 System was rolled back to previous version"
