@@ -15,9 +15,9 @@ class Bill(models.Model):
     """
 
     STATUS_CHOICES = [
-        ('DRAFT', 'Draft'),
+        ('DRAFT',     'Draft'),
         ('GENERATED', 'Generated'),
-        ('PAID', 'Paid'),
+        ('PAID',      'Paid'),
         ('CANCELLED', 'Cancelled'),
     ]
 
@@ -40,17 +40,15 @@ class Bill(models.Model):
     bill_date = models.DateField(help_text="Bill generation date")
 
     # Client details (copied from WO)
-    client_name = models.CharField(max_length=200)
+    client_name    = models.CharField(max_length=200)
     contact_person = models.CharField(max_length=100, blank=True)
-    phone = models.CharField(max_length=15, blank=True)
-    email = models.EmailField(blank=True)
-    address = models.TextField(blank=True)
+    phone          = models.CharField(max_length=15, blank=True)
+    email          = models.EmailField(blank=True)
+    address        = models.TextField(blank=True)
 
     # Financial details
     subtotal = models.DecimalField(
-        max_digits=12,
-        decimal_places=2,
-        default=0,
+        max_digits=12, decimal_places=2, default=0,
         help_text="Sum of delivered items before tax"
     )
 
@@ -63,47 +61,41 @@ class Bill(models.Model):
     igst_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
 
     total_amount = models.DecimalField(
-        max_digits=12,
-        decimal_places=2,
-        default=0,
+        max_digits=12, decimal_places=2, default=0,
         help_text="Subtotal + all taxes"
     )
 
     # Advance deduction
     advance_deducted = models.DecimalField(
-        max_digits=12,
-        decimal_places=2,
-        default=0,
+        max_digits=12, decimal_places=2, default=0,
         help_text="Advance amount deducted in this bill"
     )
 
     net_payable = models.DecimalField(
-        max_digits=12,
-        decimal_places=2,
-        default=0,
+        max_digits=12, decimal_places=2, default=0,
         help_text="Total amount - advance deducted"
     )
 
-    # Payment tracking
+    # Payment tracking (aggregate — detail rows live in BillPayment)
     amount_paid = models.DecimalField(
-        max_digits=12,
-        decimal_places=2,
-        default=0,
-        help_text="Amount paid by client"
+        max_digits=12, decimal_places=2, default=0,
+        help_text="Total amount paid by client (sum of all BillPayment rows)"
     )
 
     balance = models.DecimalField(
-        max_digits=12,
-        decimal_places=2,
-        default=0,
-        help_text="Remaining balance"
+        max_digits=12, decimal_places=2, default=0,
+        help_text="Remaining balance (net_payable - amount_paid)"
     )
 
     remarks = models.TextField(blank=True)
 
-    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='GENERATED')
+    status = models.CharField(
+        max_length=20, choices=STATUS_CHOICES, default='GENERATED'
+    )
 
-    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -115,7 +107,6 @@ class Bill(models.Model):
 
     def save(self, *args, **kwargs):
         if not self.bill_number:
-            # Auto-generate bill number
             year = datetime.now().year
             last_bill = Bill.objects.filter(
                 bill_number__startswith=f'BILL/{year}/'
@@ -128,16 +119,13 @@ class Bill(models.Model):
 
     def calculate_totals(self):
         """Calculate all amounts from delivered items"""
-        # Sum of all delivered items
         self.subtotal = sum(item.amount for item in self.items.all())
 
-        # Use same tax rates as work order
         wo = self.work_order
         self.cgst_percentage = wo.cgst_percentage
         self.sgst_percentage = wo.sgst_percentage
         self.igst_percentage = wo.igst_percentage
 
-        # Calculate taxes
         self.cgst_amount = (self.subtotal * self.cgst_percentage) / 100
         self.sgst_amount = (self.subtotal * self.sgst_percentage) / 100
         self.igst_amount = (self.subtotal * self.igst_percentage) / 100
@@ -149,47 +137,36 @@ class Bill(models.Model):
             self.igst_amount
         )
 
-        # Calculate advance deduction
-        # Maximum advance that can be deducted
-        available_advance = wo.advance_remaining
-
-        # Deduct minimum of (total_amount or available_advance)
+        available_advance  = wo.advance_remaining
         self.advance_deducted = min(self.total_amount, available_advance)
-
-        # Net payable
-        self.net_payable = self.total_amount - self.advance_deducted
-
-        # Balance
-        self.balance = self.net_payable - self.amount_paid
+        self.net_payable   = self.total_amount - self.advance_deducted
+        self.balance       = self.net_payable - self.amount_paid
 
         self.save()
 
     def update_work_order_advance(self):
         """Update work order advance after bill generation"""
         wo = self.work_order
-        wo.advance_deducted += self.advance_deducted
-        wo.total_delivered_value += self.total_amount
+        wo.advance_deducted       += self.advance_deducted
+        wo.total_delivered_value  += self.total_amount
         wo.save()
 
     @transaction.atomic
     def deduct_stock(self):
         """
-        Deduct stock for all delivered items
-        CRITICAL: This runs in a transaction - all succeed or all rollback
+        Deduct stock for all delivered items.
+        CRITICAL: runs in a transaction — all succeed or all rollback.
         """
         for bill_item in self.items.all():
             if bill_item.product:
-                # Deduct stock
                 product = bill_item.product
                 product.current_stock -= bill_item.delivered_quantity
                 product.save()
 
-                # Update work order item delivered quantity
                 wo_item = bill_item.work_order_item
                 wo_item.delivered_quantity += bill_item.delivered_quantity
                 wo_item.save()
 
-        # Update work order status
         self.work_order.update_status()
 
     @transaction.atomic
@@ -197,23 +174,19 @@ class Bill(models.Model):
         """Restore stock if bill is cancelled"""
         for bill_item in self.items.all():
             if bill_item.product:
-                # Restore stock
                 product = bill_item.product
                 product.current_stock += bill_item.delivered_quantity
                 product.save()
 
-                # Update work order item
                 wo_item = bill_item.work_order_item
                 wo_item.delivered_quantity -= bill_item.delivered_quantity
                 wo_item.save()
 
-        # Restore advance
         wo = self.work_order
-        wo.advance_deducted -= self.advance_deducted
+        wo.advance_deducted      -= self.advance_deducted
         wo.total_delivered_value -= self.total_amount
         wo.save()
 
-        # Update work order status
         wo.update_status()
 
     def __str__(self):
@@ -228,71 +201,46 @@ class BillItem(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
 
     bill = models.ForeignKey(
-        Bill,
-        on_delete=models.CASCADE,
-        related_name='items'
+        Bill, on_delete=models.CASCADE, related_name='items'
     )
 
     work_order_item = models.ForeignKey(
-        WorkOrderItem,
-        on_delete=models.PROTECT,
+        WorkOrderItem, on_delete=models.PROTECT,
         help_text="Reference to work order item"
     )
 
-    # Product reference
     product = models.ForeignKey(
-        Product,
-        on_delete=models.PROTECT,
-        null=True,
-        blank=True
+        Product, on_delete=models.PROTECT, null=True, blank=True
     )
 
-    # Item details
-    item_code = models.CharField(max_length=50)
-    item_name = models.CharField(max_length=200)
+    item_code   = models.CharField(max_length=50)
+    item_name   = models.CharField(max_length=200)
     description = models.TextField(blank=True)
-    hsn_code = models.CharField(max_length=20, blank=True)
-    unit = models.CharField(max_length=20, default='PCS')
+    hsn_code    = models.CharField(max_length=20, blank=True)
+    unit        = models.CharField(max_length=20, default='PCS')
 
-    # Quantities
     ordered_quantity = models.DecimalField(
-        max_digits=10,
-        decimal_places=2,
+        max_digits=10, decimal_places=2,
         help_text="Total quantity in work order"
     )
 
     previously_delivered_quantity = models.DecimalField(
-        max_digits=10,
-        decimal_places=2,
-        default=0,
+        max_digits=10, decimal_places=2, default=0,
         help_text="Quantity delivered in previous bills"
     )
 
     delivered_quantity = models.DecimalField(
-        max_digits=10,
-        decimal_places=2,
+        max_digits=10, decimal_places=2,
         help_text="Quantity delivered in THIS bill"
     )
 
     pending_quantity = models.DecimalField(
-        max_digits=10,
-        decimal_places=2,
-        default=0,
+        max_digits=10, decimal_places=2, default=0,
         help_text="Remaining quantity after this bill"
     )
 
-    # Pricing
-    rate = models.DecimalField(
-        max_digits=10,
-        decimal_places=2,
-        help_text="Rate per unit"
-    )
-
-    amount = models.DecimalField(
-        max_digits=12,
-        decimal_places=2,
-        help_text="delivered_quantity × rate"
-    )
+    rate   = models.DecimalField(max_digits=10, decimal_places=2, help_text="Rate per unit")
+    amount = models.DecimalField(max_digits=12, decimal_places=2, help_text="delivered_quantity × rate")
 
     remarks = models.TextField(blank=True)
 
@@ -302,26 +250,108 @@ class BillItem(models.Model):
         verbose_name_plural = 'Bill Items'
 
     def save(self, *args, **kwargs):
-        # Copy from work order item
         wo_item = self.work_order_item
-        self.product = wo_item.product
-        self.item_code = wo_item.item_code
-        self.item_name = wo_item.item_name
-        self.description = wo_item.description
-        self.hsn_code = wo_item.hsn_code
-        self.unit = wo_item.unit
-        self.rate = wo_item.rate
-        self.ordered_quantity = wo_item.ordered_quantity
+        self.product      = wo_item.product
+        self.item_code    = wo_item.item_code
+        self.item_name    = wo_item.item_name
+        self.description  = wo_item.description
+        self.hsn_code     = wo_item.hsn_code
+        self.unit         = wo_item.unit
+        self.rate         = wo_item.rate
+        self.ordered_quantity              = wo_item.ordered_quantity
         self.previously_delivered_quantity = wo_item.delivered_quantity
 
-        # Calculate amount for this delivery
-        self.amount = self.delivered_quantity * self.rate
-
-        # Calculate pending
-        total_delivered = self.previously_delivered_quantity + self.delivered_quantity
+        self.amount          = self.delivered_quantity * self.rate
+        total_delivered      = self.previously_delivered_quantity + self.delivered_quantity
         self.pending_quantity = self.ordered_quantity - total_delivered
 
         super().save(*args, **kwargs)
 
     def __str__(self):
         return f"{self.bill.bill_number} - {self.item_name}"
+
+
+class BillPayment(models.Model):
+    """
+    Individual Payment Transaction for a Bill.
+
+    Every call to POST /api/bills/{id}/mark_paid creates one record here.
+    Supports partial payments — a bill can have multiple BillPayment rows.
+
+    The Bill.amount_paid and Bill.balance fields are always the aggregate
+    values derived from summing all BillPayment rows for that bill.
+    """
+
+    PAYMENT_MODE_CHOICES = [
+        ('CASH',   'Cash'),
+        ('CHEQUE', 'Cheque'),
+        ('NEFT',   'NEFT'),
+        ('RTGS',   'RTGS'),
+        ('IMPS',   'IMPS'),
+        ('UPI',    'UPI'),
+        ('OTHER',  'Other'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    bill = models.ForeignKey(
+        Bill,
+        on_delete=models.CASCADE,
+        related_name='payments',
+        help_text="Bill this payment belongs to"
+    )
+
+    payment_number = models.PositiveIntegerField(
+        help_text="Sequential payment number for this bill (1 = first, 2 = second, ...)"
+    )
+
+    amount = models.DecimalField(
+        max_digits=12, decimal_places=2,
+        help_text="Amount paid in this transaction"
+    )
+
+    payment_date = models.DateField(
+        help_text="Date on which payment was received"
+    )
+
+    payment_mode = models.CharField(
+        max_length=20, choices=PAYMENT_MODE_CHOICES, default='CASH',
+        help_text="Mode of payment"
+    )
+
+    reference_number = models.CharField(
+        max_length=100, blank=True,
+        help_text="Cheque number / UTR / transaction reference"
+    )
+
+    remarks = models.TextField(blank=True)
+
+    # Running-total snapshot at the moment this payment was recorded
+    total_paid_after = models.DecimalField(
+        max_digits=12, decimal_places=2,
+        help_text="Cumulative amount_paid on the bill AFTER this transaction"
+    )
+
+    balance_after = models.DecimalField(
+        max_digits=12, decimal_places=2,
+        help_text="Remaining balance on the bill AFTER this transaction"
+    )
+
+    recorded_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        help_text="User who recorded this payment"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table      = 'bill_payments'
+        ordering      = ['bill', 'payment_number']
+        verbose_name  = 'Bill Payment'
+        verbose_name_plural = 'Bill Payments'
+
+    def __str__(self):
+        return (
+            f"{self.bill.bill_number} – "
+            f"Payment #{self.payment_number} – ₹{self.amount}"
+        )
