@@ -1,4 +1,3 @@
-
 from rest_framework import serializers
 from .models import (Requisition, RequisitionItem,
                      VendorRequisitionAssignment, VendorRequisitionItem,
@@ -57,6 +56,74 @@ class RequisitionCreateSerializer(serializers.ModelSerializer):
         for item_data in items_data:
             RequisitionItem.objects.create(requisition=requisition, **item_data)
         return requisition
+
+
+# ── NEW: Item serializer for updates (id is writable so we can match existing items) ──
+
+class RequisitionItemUpdateSerializer(serializers.ModelSerializer):
+    """Used during update — id must be writable to identify existing items"""
+    id = serializers.UUIDField(required=False, allow_null=True)   # ← writable
+    product_name = serializers.CharField(source='product.item_name', read_only=True)
+    product_code = serializers.CharField(source='product.item_code', read_only=True)
+    unit = serializers.CharField(source='product.unit', read_only=True)
+
+    class Meta:
+        model = RequisitionItem
+        fields = ['id', 'product', 'product_name', 'product_code', 'unit',
+                  'quantity', 'remarks']
+
+
+# ── NEW: Update serializer with proper update() logic ──
+
+class RequisitionUpdateSerializer(serializers.ModelSerializer):
+    """Serializer for PUT / PATCH on a requisition — handles item sync correctly"""
+    items = RequisitionItemUpdateSerializer(many=True, required=False)
+
+    class Meta:
+        model = Requisition
+        fields = ['requisition_date', 'remarks', 'items']
+
+    def update(self, instance, validated_data):
+        items_data = validated_data.pop('items', None)
+
+        # 1. Update header fields
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        instance.save()
+
+        # 2. Sync items only if items were provided in the payload
+        if items_data is not None:
+            existing_items = {str(item.id): item for item in instance.items.all()}
+            submitted_ids = set()
+
+            for item_data in items_data:
+                item_id = item_data.pop('id', None)
+
+                if item_id and str(item_id) in existing_items:
+                    # UPDATE existing item
+                    item = existing_items[str(item_id)]
+                    for attr, value in item_data.items():
+                        setattr(item, attr, value)
+                    item.save()
+                    submitted_ids.add(str(item_id))
+                else:
+                    # CREATE new item
+                    new_item = RequisitionItem.objects.create(
+                        requisition=instance, **item_data
+                    )
+                    submitted_ids.add(str(new_item.id))
+
+            # DELETE items that were not in the payload
+            for item_id, item in existing_items.items():
+                if item_id not in submitted_ids:
+                    item.delete()
+
+        # Return full representation using the read serializer
+        return instance
+
+    def to_representation(self, instance):
+        return RequisitionSerializer(instance).data
+
 
 class VendorRequisitionItemSerializer(serializers.ModelSerializer):
     """Serializer for vendor assigned items"""
@@ -125,19 +192,16 @@ class VendorAssignmentCreateSerializer(serializers.Serializer):
 
     def create(self, validated_data):
         items_data = validated_data.pop('items')
-        # Get the actual model instances from UUIDs
         requisition = Requisition.objects.get(id=validated_data['requisition'])
         vendor = Vendor.objects.get(id=validated_data['vendor'])
         assigned_by = validated_data['assigned_by']
         remarks = validated_data.get('remarks', '')
-        # Create assignment with actual instances
         assignment = VendorRequisitionAssignment.objects.create(
             requisition=requisition,
             vendor=vendor,
             assigned_by=assigned_by,
             remarks=remarks
         )
-        # Create vendor items
         for item_data in items_data:
             req_item = RequisitionItem.objects.get(id=item_data['requisition_item'])
             VendorRequisitionItem.objects.create(
@@ -146,7 +210,6 @@ class VendorAssignmentCreateSerializer(serializers.Serializer):
                 product=req_item.product,
                 quantity=item_data['quantity']
             )
-        # Mark requisition as assigned
         requisition.is_assigned = True
         requisition.save()
         return assignment
@@ -203,12 +266,6 @@ class QuotationItemInputSerializer(serializers.Serializer):
     )
 
 class VendorQuotationCreateSerializer(serializers.Serializer):
-    """
-    Serializer for creating vendor quotations
-    User provides: requisition_id + vendor_id
-    System shows: All items from that requisition
-    User enters: quoted_rate for each item
-    """
     requisition = serializers.UUIDField(help_text="Requisition ID")
     vendor = serializers.UUIDField(help_text="Vendor ID")
     reference_number = serializers.CharField(required=False, allow_blank=True)
@@ -246,7 +303,6 @@ class VendorQuotationCreateSerializer(serializers.Serializer):
                 raise serializers.ValidationError("vendor_item is required for each item")
             if 'quoted_rate' not in item:
                 raise serializers.ValidationError("quoted_rate is required for each item")
-            # Validate vendor_item exists
             try:
                 VendorRequisitionItem.objects.get(id=item['vendor_item'])
             except VendorRequisitionItem.DoesNotExist:
@@ -256,7 +312,6 @@ class VendorQuotationCreateSerializer(serializers.Serializer):
     def create(self, validated_data):
         items_data = validated_data.pop('items')
         assignment = validated_data.pop('assignment')
-        # Create quotation
         quotation = VendorQuotation.objects.create(
             assignment=assignment,
             reference_number=validated_data.get('reference_number', ''),
@@ -267,11 +322,8 @@ class VendorQuotationCreateSerializer(serializers.Serializer):
             created_by=validated_data['created_by']
         )
         total_amount = 0
-        # Create quotation items
         for item_data in items_data:
-            vendor_item = VendorRequisitionItem.objects.get(
-                id=item_data['vendor_item']
-            )
+            vendor_item = VendorRequisitionItem.objects.get(id=item_data['vendor_item'])
             quotation_item = VendorQuotationItem.objects.create(
                 quotation=quotation,
                 vendor_item=vendor_item,
@@ -281,7 +333,6 @@ class VendorQuotationCreateSerializer(serializers.Serializer):
                 remarks=item_data.get('remarks', '')
             )
             total_amount += quotation_item.amount
-        # Update quotation total
         quotation.total_amount = total_amount
         quotation.save()
         return quotation
@@ -291,10 +342,6 @@ class VendorQuotationCreateSerializer(serializers.Serializer):
 
 
 class QuotationItemsForEntrySerializer(serializers.Serializer):
-    """
-    Helper serializer to show items that need quotation entry
-    GET /api/vendor-assignments/{id}/items-for-quotation
-    """
     vendor_item_id = serializers.UUIDField(source='id')
     product_id = serializers.UUIDField(source='product.id')
     product_code = serializers.CharField(source='product.item_code')
@@ -326,7 +373,6 @@ class RequisitionFlowSerializer(serializers.Serializer):
                 'quotations': []
             }
 
-            # Get assigned items
             for item in assignment.items.all():
                 vendor_data['assigned_items'].append({
                     'id': item.id,
@@ -339,7 +385,6 @@ class RequisitionFlowSerializer(serializers.Serializer):
                     'quantity': item.quantity
                 })
 
-            # Get quotations
             for quotation in assignment.quotations.all():
                 quotation_data = {
                     'quotation_number': quotation.quotation_number,

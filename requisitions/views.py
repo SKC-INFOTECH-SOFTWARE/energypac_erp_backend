@@ -8,6 +8,7 @@ from .models import (Requisition, VendorRequisitionAssignment, VendorQuotation)
 from .serializers import (
     RequisitionSerializer,
     RequisitionCreateSerializer,
+    RequisitionUpdateSerializer,       # ← NEW
     VendorRequisitionAssignmentSerializer,
     VendorAssignmentCreateSerializer,
     VendorQuotationSerializer,
@@ -32,6 +33,8 @@ class RequisitionViewSet(viewsets.ModelViewSet):
     def get_serializer_class(self):
         if self.action == 'create':
             return RequisitionCreateSerializer
+        if self.action in ('update', 'partial_update'):   # ← NEW
+            return RequisitionUpdateSerializer             # ← NEW
         return RequisitionSerializer
 
     def perform_create(self, serializer):
@@ -125,9 +128,6 @@ class RequisitionViewSet(viewsets.ModelViewSet):
 
 # ====================== VendorAssignmentViewSet ======================
 class VendorAssignmentViewSet(viewsets.ModelViewSet):
-    """
-    ViewSet for Vendor Assignment CRUD
-    """
     queryset = VendorRequisitionAssignment.objects.all().select_related(
         'requisition', 'vendor', 'assigned_by'
     ).prefetch_related('items__product')
@@ -171,9 +171,6 @@ class VendorAssignmentViewSet(viewsets.ModelViewSet):
 
 # ====================== VendorQuotationViewSet ======================
 class VendorQuotationViewSet(viewsets.ModelViewSet):
-    """
-    ViewSet for Vendor Quotation CRUD
-    """
     queryset = VendorQuotation.objects.all().select_related(
         'assignment__vendor', 'assignment__requisition', 'created_by'
     ).prefetch_related('items__product')
@@ -216,7 +213,6 @@ class VendorQuotationViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=['get'])
     def by_vendor(self, request):
-        """Get quotations by vendor"""
         vendor_id = request.query_params.get('vendor')
         if not vendor_id:
             return Response({'error': 'vendor parameter is required'}, status=status.HTTP_400_BAD_REQUEST)
@@ -226,7 +222,6 @@ class VendorQuotationViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=['get'])
     def by_requisition(self, request):
-        """Get all quotations for a requisition"""
         requisition_id = request.query_params.get('requisition')
         if not requisition_id:
             return Response({'error': 'requisition parameter is required'}, status=status.HTTP_400_BAD_REQUEST)
@@ -236,7 +231,6 @@ class VendorQuotationViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=['get'])
     def by_requisition_vendor(self, request):
-        """Get items for quotation entry using requisition + vendor"""
         requisition_id = request.query_params.get('requisition')
         vendor_id = request.query_params.get('vendor')
 

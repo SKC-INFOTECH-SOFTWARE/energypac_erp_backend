@@ -8,14 +8,17 @@ from django.conf import settings
 from drf_spectacular.utils import extend_schema, OpenApiParameter, OpenApiTypes, inline_serializer
 from rest_framework import serializers as drf_serializers
 import os
+
 from .models import ClientQuery, SalesQuotation, SalesQuotationItem
 from .serializers import (
     ClientQuerySerializer,
     ClientQueryCreateSerializer,
     SalesQuotationSerializer,
     SalesQuotationCreateSerializer,
+    SalesQuotationUpdateSerializer,
     SalesQuotationItemSerializer,
 )
+
 
 class ClientQueryViewSet(viewsets.ModelViewSet):
     """
@@ -88,7 +91,9 @@ class ClientQueryViewSet(viewsets.ModelViewSet):
         request=inline_serializer(
             name='ClientQueryStatusUpdate',
             fields={
-                'status': drf_serializers.ChoiceField(choices=ClientQuery._meta.get_field('status').choices)
+                'status': drf_serializers.ChoiceField(
+                    choices=ClientQuery._meta.get_field('status').choices
+                )
             }
         ),
         responses=ClientQuerySerializer,
@@ -109,34 +114,82 @@ class ClientQueryViewSet(viewsets.ModelViewSet):
         serializer = self.get_serializer(query)
         return Response(serializer.data)
 
+
 class SalesQuotationViewSet(viewsets.ModelViewSet):
     """
     ViewSet for Sales Quotation CRUD operations
-    Features:
-    - Create quotations from client queries
-    - Select products from stock or manual entry
-    - Automatic GST calculation (CGST/SGST/IGST)
-    - Auto-add manual products to inventory
+
+    Endpoints
+    ---------
+    Standard CRUD:
+        GET    /api/quotations                  – list all quotations
+        POST   /api/quotations                  – create new quotation
+        GET    /api/quotations/{id}             – retrieve quotation
+        PUT    /api/quotations/{id}             – full update  (all fields + items)
+        PATCH  /api/quotations/{id}             – partial update
+
+    Custom actions:
+        POST   /api/quotations/{id}/recalculate    – recalculate totals
+        POST   /api/quotations/{id}/update_gst     – update GST only
+        POST   /api/quotations/{id}/update_status  – update status only
+        GET    /api/quotations/{id}/items          – list items
+        GET    /api/quotations/{id}/summary        – full formatted summary
+        GET    /api/quotations/by_status           – filter by status
+
+    PUT / PATCH body for full update
+    ---------------------------------
+    Any combination of the following fields:
+    {
+        "quotation_date":  "2026-03-01",
+        "validity_date":   "2026-03-31",
+        "payment_terms":   "30 days net",
+        "delivery_terms":  "Ex-works",
+        "remarks":         "Revised per call",
+        "cgst_percentage": 9,
+        "sgst_percentage": 9,
+        "igst_percentage": 0,
+        "status":          "SENT",
+        "items": [
+            {
+                "id":       "existing-item-uuid",   // omit to create new
+                "quantity": 5,
+                "rate":     1200,
+                "remarks":  "updated"
+            },
+            {
+                "item_code": "NEW001",              // no id → new item
+                "item_name": "New Widget",
+                "unit":      "PCS",
+                "quantity":  2,
+                "rate":      500
+            }
+            // items NOT listed here are deleted
+        ]
+    }
     """
     queryset = SalesQuotation.objects.all().select_related(
         'client_query', 'created_by'
     ).prefetch_related('items__product')
-    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
-    filterset_fields = ['client_query', 'status', 'quotation_date']
-    search_fields = [
+    filter_backends    = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
+    filterset_fields   = ['client_query', 'status', 'quotation_date']
+    search_fields      = [
         'quotation_number', 'client_query__client_name',
         'client_query__query_number'
     ]
-    ordering_fields = ['quotation_date', 'created_at', 'total_amount']
-    ordering = ['-quotation_number']
+    ordering_fields    = ['quotation_date', 'created_at', 'total_amount']
+    ordering           = ['-quotation_number']
 
     def get_serializer_class(self):
         if self.action == 'create':
             return SalesQuotationCreateSerializer
+        if self.action in ('update', 'partial_update'):
+            return SalesQuotationUpdateSerializer
         return SalesQuotationSerializer
 
     def perform_create(self, serializer):
         serializer.save(created_by=self.request.user)
+
+    # ── custom actions ────────────────────────────────────────────────────────
 
     @extend_schema(
         request=None,
@@ -148,7 +201,7 @@ class SalesQuotationViewSet(viewsets.ModelViewSet):
         """Recalculate totals for quotation"""
         quotation = self.get_object()
         quotation.calculate_totals()
-        serializer = self.get_serializer(quotation)
+        serializer = SalesQuotationSerializer(quotation)
         return Response(serializer.data)
 
     @extend_schema(
@@ -161,11 +214,11 @@ class SalesQuotationViewSet(viewsets.ModelViewSet):
             }
         ),
         responses=SalesQuotationSerializer,
-        summary="Update GST percentages"
+        summary="Update GST percentages only"
     )
     @action(detail=True, methods=['post'])
     def update_gst(self, request, pk=None):
-        """Update GST percentages and recalculate"""
+        """Update GST percentages and recalculate (convenience shortcut)"""
         quotation = self.get_object()
         cgst = request.data.get('cgst_percentage')
         sgst = request.data.get('sgst_percentage')
@@ -178,22 +231,24 @@ class SalesQuotationViewSet(viewsets.ModelViewSet):
             quotation.igst_percentage = igst
         quotation.save()
         quotation.calculate_totals()
-        serializer = self.get_serializer(quotation)
+        serializer = SalesQuotationSerializer(quotation)
         return Response(serializer.data)
 
     @extend_schema(
         request=inline_serializer(
             name='SalesQuotationStatusUpdate',
             fields={
-                'status': drf_serializers.ChoiceField(choices=SalesQuotation._meta.get_field('status').choices)
+                'status': drf_serializers.ChoiceField(
+                    choices=SalesQuotation._meta.get_field('status').choices
+                )
             }
         ),
         responses=SalesQuotationSerializer,
-        summary="Update quotation status"
+        summary="Update quotation status only"
     )
     @action(detail=True, methods=['post'])
     def update_status(self, request, pk=None):
-        """Update quotation status"""
+        """Update quotation status (convenience shortcut)"""
         quotation = self.get_object()
         new_status = request.data.get('status')
         if new_status not in dict(SalesQuotation._meta.get_field('status').choices):
@@ -203,11 +258,11 @@ class SalesQuotationViewSet(viewsets.ModelViewSet):
             )
         quotation.status = new_status
         quotation.save()
-        # Update client query status if quotation is accepted
+        # Mirror onto client query when accepted
         if new_status == 'ACCEPTED':
             quotation.client_query.status = 'CONVERTED'
             quotation.client_query.save()
-        serializer = self.get_serializer(quotation)
+        serializer = SalesQuotationSerializer(quotation)
         return Response(serializer.data)
 
     @extend_schema(
@@ -243,7 +298,7 @@ class SalesQuotationViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
         quotations = self.queryset.filter(status=status_param)
-        serializer = self.get_serializer(quotations, many=True)
+        serializer = SalesQuotationSerializer(quotations, many=True)
         return Response({
             'status': status_param,
             'count': quotations.count(),
@@ -256,13 +311,11 @@ class SalesQuotationViewSet(viewsets.ModelViewSet):
             fields={
                 'quotation_number': drf_serializers.CharField(),
                 'client_name': drf_serializers.CharField(),
-                # Add other fields if strictly needed, but `object` usually suffices for free-form or we can detail it.
-                # For now, leaving it implicit or basic.
                 'total_amount': drf_serializers.FloatField(),
                 'status': drf_serializers.CharField(),
             }
         ),
-        summary="Get quotation summary"
+        summary="Get quotation summary with tax breakdown"
     )
     @action(detail=True, methods=['get'])
     def summary(self, request, pk=None):
@@ -271,39 +324,39 @@ class SalesQuotationViewSet(viewsets.ModelViewSet):
         items_summary = []
         for item in quotation.items.all():
             items_summary.append({
-                'item_name': item.item_name,
-                'item_code': item.item_code,
-                'hsn_code': item.hsn_code,
-                'quantity': float(item.quantity),
-                'unit': item.unit,
-                'rate': float(item.rate),
-                'amount': float(item.amount),
-                'from_stock': item.product is not None
+                'item_name':   item.item_name,
+                'item_code':   item.item_code,
+                'hsn_code':    item.hsn_code,
+                'quantity':    float(item.quantity),
+                'unit':        item.unit,
+                'rate':        float(item.rate),
+                'amount':      float(item.amount),
+                'from_stock':  item.product is not None
             })
         return Response({
             'quotation_number': quotation.quotation_number,
-            'client_name': quotation.client_query.client_name,
-            'contact_person': quotation.client_query.contact_person,
-            'phone': quotation.client_query.phone,
-            'email': quotation.client_query.email,
-            'address': quotation.client_query.address,
-            'quotation_date': quotation.quotation_date,
-            'validity_date': quotation.validity_date,
-            'items': items_summary,
-            'total_items': len(items_summary),
-            'subtotal': float(quotation.subtotal),
+            'client_name':      quotation.client_query.client_name,
+            'contact_person':   quotation.client_query.contact_person,
+            'phone':            quotation.client_query.phone,
+            'email':            quotation.client_query.email,
+            'address':          quotation.client_query.address,
+            'quotation_date':   quotation.quotation_date,
+            'validity_date':    quotation.validity_date,
+            'items':            items_summary,
+            'total_items':      len(items_summary),
+            'subtotal':         float(quotation.subtotal),
             'taxes': {
                 'cgst': {
                     'percentage': float(quotation.cgst_percentage),
-                    'amount': float(quotation.cgst_amount)
+                    'amount':     float(quotation.cgst_amount)
                 },
                 'sgst': {
                     'percentage': float(quotation.sgst_percentage),
-                    'amount': float(quotation.sgst_amount)
+                    'amount':     float(quotation.sgst_amount)
                 },
                 'igst': {
                     'percentage': float(quotation.igst_percentage),
-                    'amount': float(quotation.igst_amount)
+                    'amount':     float(quotation.igst_amount)
                 },
                 'total_tax': float(
                     quotation.cgst_amount +
@@ -311,38 +364,36 @@ class SalesQuotationViewSet(viewsets.ModelViewSet):
                     quotation.igst_amount
                 )
             },
-            'total_amount': float(quotation.total_amount),
-            'status': quotation.status,
-            'payment_terms': quotation.payment_terms,
+            'total_amount':   float(quotation.total_amount),
+            'status':         quotation.status,
+            'payment_terms':  quotation.payment_terms,
             'delivery_terms': quotation.delivery_terms,
-            'remarks': quotation.remarks
+            'remarks':        quotation.remarks
         })
+
 
 class SalesQuotationItemViewSet(viewsets.ModelViewSet):
     """
-    ViewSet for managing individual quotation items
-    Allows adding/updating/removing items after quotation creation
+    ViewSet for managing individual quotation items.
+    Allows adding / updating / removing items after quotation creation.
     """
     queryset = SalesQuotationItem.objects.all().select_related('quotation', 'product')
-    filter_backends = [DjangoFilterBackend, filters.SearchFilter]
+    filter_backends  = [DjangoFilterBackend, filters.SearchFilter]
     filterset_fields = ['quotation', 'product']
-    search_fields = ['item_name', 'item_code']
+    search_fields    = ['item_name', 'item_code']
 
     def get_serializer_class(self):
         return SalesQuotationItemSerializer
 
     def perform_create(self, serializer):
         item = serializer.save()
-        # Recalculate quotation totals
         item.quotation.calculate_totals()
 
     def perform_update(self, serializer):
         item = serializer.save()
-        # Recalculate quotation totals
         item.quotation.calculate_totals()
 
     def perform_destroy(self, instance):
         quotation = instance.quotation
         instance.delete()
-        # Recalculate quotation totals
         quotation.calculate_totals()
