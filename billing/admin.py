@@ -27,7 +27,7 @@ class BillPaymentInline(admin.TabularInline):
     fields = readonly_fields + ['remarks']
 
     def has_add_permission(self, request, obj=None):
-        return False   # payments are created only via mark_paid API
+        return False   # payments are created only mark_paid API
 
     def has_delete_permission(self, request, obj=None):
         return False   # payment records are immutable
