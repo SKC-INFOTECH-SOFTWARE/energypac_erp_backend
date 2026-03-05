@@ -5,100 +5,86 @@ from decimal import Decimal
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Payment serializers
+# Payment serializer
 # ─────────────────────────────────────────────────────────────────────────────
 
 class BillPaymentSerializer(serializers.ModelSerializer):
-    """Read serializer — used to display payment history"""
-    recorded_by_name = serializers.CharField(
-        source='recorded_by.get_full_name', read_only=True
-    )
-    payment_mode_display = serializers.CharField(
-        source='get_payment_mode_display', read_only=True
-    )
+    recorded_by_name     = serializers.CharField(source='recorded_by.get_full_name', read_only=True)
+    payment_mode_display = serializers.CharField(source='get_payment_mode_display', read_only=True)
 
     class Meta:
         model  = BillPayment
         fields = [
-            'id',
-            'payment_number',
-            'amount',
-            'payment_date',
-            'payment_mode',
-            'payment_mode_display',
-            'reference_number',
-            'remarks',
-            'total_paid_after',
-            'balance_after',
-            'recorded_by',
-            'recorded_by_name',
-            'created_at',
+            'id', 'payment_number', 'amount', 'payment_date',
+            'payment_mode', 'payment_mode_display', 'reference_number',
+            'remarks', 'total_paid_after', 'balance_after',
+            'recorded_by', 'recorded_by_name', 'created_at',
         ]
-        read_only_fields = fields   # all read-only — written only via mark_paid
+        read_only_fields = fields
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Bill item serializers
+# Bill item serializer
 # ─────────────────────────────────────────────────────────────────────────────
 
 class BillItemSerializer(serializers.ModelSerializer):
-    """Serializer for bill items"""
-
     class Meta:
         model  = BillItem
         fields = [
             'id', 'work_order_item', 'product', 'item_code', 'item_name',
             'description', 'hsn_code', 'unit', 'ordered_quantity',
             'previously_delivered_quantity', 'delivered_quantity',
-            'pending_quantity', 'rate', 'amount', 'remarks'
+            'pending_quantity', 'rate', 'amount', 'remarks',
         ]
         read_only_fields = [
             'id', 'product', 'item_code', 'item_name', 'description',
             'hsn_code', 'unit', 'ordered_quantity',
             'previously_delivered_quantity', 'pending_quantity',
-            'rate', 'amount'
+            'rate', 'amount',
         ]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Bill serializers
+# Bill read serializer
 # ─────────────────────────────────────────────────────────────────────────────
 
 class BillSerializer(serializers.ModelSerializer):
-    """Serializer for viewing bills (list & retrieve)"""
-    items            = BillItemSerializer(many=True, read_only=True)
-    payments         = BillPaymentSerializer(many=True, read_only=True)
-    wo_number        = serializers.CharField(source='work_order.wo_number', read_only=True)
-    created_by_name  = serializers.CharField(source='created_by.get_full_name', read_only=True)
-    total_items      = serializers.SerializerMethodField()
-    total_gst        = serializers.SerializerMethodField()
-    payment_count    = serializers.SerializerMethodField()
+    items             = BillItemSerializer(many=True, read_only=True)
+    payments          = BillPaymentSerializer(many=True, read_only=True)
+    wo_number         = serializers.CharField(source='work_order.wo_number', read_only=True)
+    created_by_name   = serializers.CharField(source='created_by.get_full_name', read_only=True)
+    bill_type_display = serializers.CharField(source='get_bill_type_display', read_only=True)
+    total_items       = serializers.SerializerMethodField()
+    total_gst         = serializers.SerializerMethodField()
+    payment_count     = serializers.SerializerMethodField()
 
     class Meta:
         model  = Bill
         fields = [
-            'id', 'bill_number', 'work_order', 'wo_number', 'bill_date',
+            'id', 'bill_number',
+            'bill_type', 'bill_type_display',
+            'work_order', 'wo_number', 'bill_date',
             'client_name', 'contact_person', 'phone', 'email', 'address',
+            # Amounts (all INR)
             'subtotal',
             'cgst_percentage', 'sgst_percentage', 'igst_percentage',
             'cgst_amount',     'sgst_amount',     'igst_amount',
             'total_gst',
             'total_amount',
+            'freight_cost',
             'advance_deducted', 'net_payable',
             'amount_paid', 'balance',
-            'payment_count',
-            'remarks', 'status',
-            'created_by', 'created_by_name',
-            'total_items',
-            'items',
-            'payments',
-            'created_at', 'updated_at'
+            # Meta
+            'payment_count', 'remarks', 'status',
+            'created_by', 'created_by_name', 'total_items',
+            'items', 'payments',
+            'created_at', 'updated_at',
         ]
         read_only_fields = [
             'id', 'bill_number', 'subtotal',
             'cgst_amount', 'sgst_amount', 'igst_amount',
             'total_amount', 'advance_deducted', 'net_payable',
-            'balance', 'created_at', 'updated_at'
+            'balance', 'created_at', 'updated_at',
         ]
 
     def get_total_items(self, obj):
@@ -116,7 +102,6 @@ class BillSerializer(serializers.ModelSerializer):
 # ─────────────────────────────────────────────────────────────────────────────
 
 class BillItemInputSerializer(serializers.Serializer):
-    """Input serializer for bill items during creation"""
     work_order_item    = serializers.UUIDField(required=True)
     delivered_quantity = serializers.DecimalField(
         max_digits=10, decimal_places=2, required=True,
@@ -127,13 +112,25 @@ class BillItemInputSerializer(serializers.Serializer):
 
 class BillCreateSerializer(serializers.Serializer):
     """
-    Serializer for creating bills from work order
-    WITH AUTOMATIC STOCK DEDUCTION
+    Create a bill from a work order. All amounts are in INR.
+
+    Fields
+    ------
+    bill_type    : 'DOMESTIC' (default) or 'INTERNATIONAL' — classification only.
+    freight_cost : Flat freight/shipping charge in INR. Defaults to 0.
     """
-    work_order = serializers.UUIDField(help_text="Work Order ID")
-    bill_date  = serializers.DateField(input_formats=['%Y-%m-%d', '%d-%m-%Y'])
-    remarks    = serializers.CharField(required=False, allow_blank=True)
-    items      = serializers.ListField(
+    work_order   = serializers.UUIDField(help_text="Work Order ID")
+    bill_date    = serializers.DateField(input_formats=['%Y-%m-%d', '%d-%m-%Y'])
+    bill_type    = serializers.ChoiceField(
+        choices=['DOMESTIC', 'INTERNATIONAL'],
+        default='DOMESTIC'
+    )
+    freight_cost = serializers.DecimalField(
+        max_digits=12, decimal_places=2, default=Decimal('0'),
+        help_text="Flat freight/shipping charge in INR"
+    )
+    remarks = serializers.CharField(required=False, allow_blank=True)
+    items   = serializers.ListField(
         child=BillItemInputSerializer(),
         help_text="List of items being delivered"
     )
@@ -182,17 +179,21 @@ class BillCreateSerializer(serializers.Serializer):
         items_data   = validated_data.pop('items')
         work_order   = WorkOrder.objects.get(id=validated_data.pop('work_order'))
         created_by   = validated_data.pop('created_by')
+        bill_type    = validated_data.pop('bill_type', 'DOMESTIC')
+        freight_cost = validated_data.pop('freight_cost', Decimal('0'))
 
         bill = Bill.objects.create(
             work_order     = work_order,
             bill_date      = validated_data['bill_date'],
+            bill_type      = bill_type,
+            freight_cost   = freight_cost,
             client_name    = work_order.client_name,
             contact_person = work_order.contact_person,
             phone          = work_order.phone,
             email          = work_order.email,
             address        = work_order.address,
             remarks        = validated_data.get('remarks', ''),
-            created_by     = created_by
+            created_by     = created_by,
         )
 
         for item_data in items_data:
@@ -201,7 +202,7 @@ class BillCreateSerializer(serializers.Serializer):
                 bill               = bill,
                 work_order_item    = wo_item,
                 delivered_quantity = item_data['delivered_quantity'],
-                remarks            = item_data.get('remarks', '')
+                remarks            = item_data.get('remarks', ''),
             )
 
         bill.calculate_totals()
@@ -219,7 +220,6 @@ class BillCreateSerializer(serializers.Serializer):
 # ─────────────────────────────────────────────────────────────────────────────
 
 class StockValidationSerializer(serializers.Serializer):
-    """Serializer for pre-bill stock validation"""
     work_order = serializers.UUIDField()
     items      = serializers.ListField(child=BillItemInputSerializer())
 
@@ -236,9 +236,9 @@ class StockValidationSerializer(serializers.Serializer):
                         'item_code': wo_item.item_code,
                         'item_name': wo_item.item_name,
                         'issue':     'EXCEEDS_PENDING',
-                        'message':   f"Delivery quantity {delivered_qty} exceeds pending {wo_item.pending_quantity}",
+                        'message':   f"Delivery {delivered_qty} exceeds pending {wo_item.pending_quantity}",
                         'requested': float(delivered_qty),
-                        'pending':   float(wo_item.pending_quantity)
+                        'pending':   float(wo_item.pending_quantity),
                     })
                     continue
 
@@ -251,20 +251,20 @@ class StockValidationSerializer(serializers.Serializer):
                             'issue':     'INSUFFICIENT_STOCK',
                             'message':   f"Insufficient stock. Available: {current_stock}, Requested: {delivered_qty}",
                             'available': float(current_stock),
-                            'requested': float(delivered_qty)
+                            'requested': float(delivered_qty),
                         })
 
             except WorkOrderItem.DoesNotExist:
                 stock_issues.append({
                     'item_id': str(item_data['work_order_item']),
                     'issue':   'ITEM_NOT_FOUND',
-                    'message': 'Work order item not found'
+                    'message': 'Work order item not found',
                 })
 
         if stock_issues:
             raise serializers.ValidationError({
                 'stock_validation_failed': True,
-                'issues': stock_issues
+                'issues': stock_issues,
             })
 
         return value
