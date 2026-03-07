@@ -14,6 +14,7 @@ from .serializers import (
     BillPaymentSerializer,
     StockValidationSerializer,
 )
+from core.password_confirm import check_password_confirmation, require_password_confirmation
 
 
 class BillViewSet(viewsets.ModelViewSet):
@@ -30,12 +31,12 @@ class BillViewSet(viewsets.ModelViewSet):
         bill_type    : 'DOMESTIC' (default) | 'INTERNATIONAL'  (classification only)
         freight_cost : Flat freight charge in INR (default 0)
 
-    Custom actions:
+    Custom actions (⚠ marked ones require confirm_password in body):
         POST  /api/bills/validate_stock
-        POST  /api/bills/{id}/mark_paid
+        POST  /api/bills/{id}/mark_paid          ⚠ requires confirm_password
         GET   /api/bills/{id}/payment_history
         GET   /api/bills/{id}/detailed_summary
-        POST  /api/bills/{id}/cancel
+        POST  /api/bills/{id}/cancel             ⚠ requires confirm_password
         GET   /api/bills/by_work_order
         GET   /api/bills/pending_payment
     """
@@ -92,15 +93,23 @@ class BillViewSet(viewsets.ModelViewSet):
         """
         Record a payment transaction against a bill (always in INR).
 
+        ⚠️  SENSITIVE ACTION — requires confirm_password in the request body.
+
         POST /api/bills/{id}/mark_paid
         {
-            "amount_paid":      45000.00,
-            "payment_date":     "2026-02-27",         // optional, default today
-            "payment_mode":     "NEFT",               // CASH/CHEQUE/NEFT/RTGS/IMPS/UPI/OTHER
-            "reference_number": "UTR1234567890",      // optional
-            "remarks":          "February instalment" // optional
+            "confirm_password":  "<your password>",   ← required
+            "amount_paid":       45000.00,
+            "payment_date":      "2026-02-27",         // optional, default today
+            "payment_mode":      "NEFT",               // CASH/CHEQUE/NEFT/RTGS/IMPS/UPI/OTHER
+            "reference_number":  "UTR1234567890",      // optional
+            "remarks":           "February instalment" // optional
         }
         """
+        # ── password gate ──────────────────────────────────────────────────
+        password_error = check_password_confirmation(request)
+        if password_error:
+            return password_error
+
         bill = self.get_object()
 
         if bill.status == 'CANCELLED':
@@ -284,7 +293,22 @@ class BillViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'])
     @transaction.atomic
     def cancel(self, request, pk=None):
-        """POST /api/bills/{id}/cancel"""
+        """
+        Cancel a bill and restore stock.
+
+        ⚠️  SENSITIVE ACTION — requires confirm_password in the request body.
+
+        POST /api/bills/{id}/cancel
+        {
+            "confirm_password": "<your password>",   ← required
+            "reason":           "Duplicate bill"     // optional
+        }
+        """
+        # ── password gate ──────────────────────────────────────────────────
+        password_error = check_password_confirmation(request)
+        if password_error:
+            return password_error
+
         bill = self.get_object()
 
         if bill.status == 'CANCELLED':

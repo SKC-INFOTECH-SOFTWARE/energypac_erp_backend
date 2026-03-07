@@ -2,21 +2,33 @@ from rest_framework import viewsets, filters, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from django_filters.rest_framework import DjangoFilterBackend
-from django.db import models 
+from django.db import models
+
 from .models import Product
 from .serializers import ProductSerializer
+from core.password_confirm import PasswordConfirmDestroyMixin
 
 
-class ProductViewSet(viewsets.ModelViewSet):
+class ProductViewSet(PasswordConfirmDestroyMixin, viewsets.ModelViewSet):
     """
     ViewSet for Product CRUD operations
 
-    list: Get all products
-    create: Add new product
-    retrieve: Get product by ID
-    update: Update product
-    partial_update: Partially update product
-    destroy: Delete product
+    list:           GET    /api/products
+    create:         POST   /api/products
+    retrieve:       GET    /api/products/{id}
+    update:         PUT    /api/products/{id}
+    partial_update: PATCH  /api/products/{id}
+    destroy:        DELETE /api/products/{id}  ⚠ requires confirm_password in body
+
+    Custom:
+        GET /api/products/low_stock  – products at or below reorder level
+        GET /api/products/active     – active products only
+
+    DELETE body
+    -----------
+    {
+        "confirm_password": "<your password>"
+    }
     """
     queryset = Product.objects.all()
     serializer_class = ProductSerializer

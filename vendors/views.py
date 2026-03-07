@@ -2,19 +2,31 @@ from rest_framework import viewsets, filters, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from django_filters.rest_framework import DjangoFilterBackend
+
 from .models import Vendor
 from .serializers import VendorSerializer
+from core.password_confirm import PasswordConfirmDestroyMixin
 
-class VendorViewSet(viewsets.ModelViewSet):
+
+class VendorViewSet(PasswordConfirmDestroyMixin, viewsets.ModelViewSet):
     """
     ViewSet for Vendor CRUD operations
 
-    list: Get all vendors
-    create: Add new vendor
-    retrieve: Get vendor by ID
-    update: Update vendor
-    partial_update: Partially update vendor
-    destroy: Delete vendor
+    list:           GET    /api/vendors
+    create:         POST   /api/vendors
+    retrieve:       GET    /api/vendors/{id}
+    update:         PUT    /api/vendors/{id}
+    partial_update: PATCH  /api/vendors/{id}
+    destroy:        DELETE /api/vendors/{id}   ⚠ requires confirm_password in body
+
+    Custom:
+        GET /api/vendors/active  – active vendors only
+
+    DELETE body
+    -----------
+    {
+        "confirm_password": "<your password>"
+    }
     """
     queryset = Vendor.objects.all()
     serializer_class = VendorSerializer

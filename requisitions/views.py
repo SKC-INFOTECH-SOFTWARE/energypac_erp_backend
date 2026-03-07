@@ -99,6 +99,7 @@ class RequisitionViewSet(viewsets.ModelViewSet):
         }
         for assignment in assignments:
             vendor_info = {
+                'vendor_id': assignment.vendor.id,
                 'vendor_name': assignment.vendor.vendor_name,
                 'vendor_code': assignment.vendor.vendor_code,
                 'quotations': []

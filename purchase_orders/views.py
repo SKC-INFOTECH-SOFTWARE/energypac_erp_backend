@@ -5,6 +5,7 @@ from django_filters.rest_framework import DjangoFilterBackend
 
 from .models import PurchaseOrder, PurchaseOrderItem
 from .serializers import PurchaseOrderSerializer, GeneratePOSerializer
+from core.password_confirm import check_password_confirmation
 
 
 class PurchaseOrderViewSet(viewsets.ModelViewSet):
@@ -18,11 +19,11 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
         GET    /api/purchase-orders/{id}             – retrieve PO
         PATCH  /api/purchase-orders/{id}             – partial update
 
-    Custom actions:
+    Custom actions (⚠ marked ones require confirm_password in body):
         POST   /api/purchase-orders/generate_from_comparison   – create PO from selections
         POST   /api/purchase-orders/{id}/mark_item_purchased   – receive one item into stock
         POST   /api/purchase-orders/{id}/mark_all_purchased    – receive all items into stock
-        POST   /api/purchase-orders/{id}/cancel                – cancel PO  ← NEW
+        POST   /api/purchase-orders/{id}/cancel                ⚠ requires confirm_password
     """
     queryset = PurchaseOrder.objects.all().select_related(
         'requisition', 'vendor', 'created_by', 'cancelled_by'
@@ -128,7 +129,7 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
         })
 
     # ──────────────────────────────────────────────────────────────────────────
-    # Cancel  ← NEW
+    # Cancel  — password protected
     # ──────────────────────────────────────────────────────────────────────────
 
     @action(detail=True, methods=['post'])
@@ -136,9 +137,12 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
         """
         Cancel a Purchase Order.
 
+        ⚠️  SENSITIVE ACTION — requires confirm_password in the request body.
+
         POST /api/purchase-orders/{id}/cancel
         {
-            "reason": "Vendor could not supply on time"   // optional
+            "confirm_password": "<your password>",          ← required
+            "reason":           "Vendor could not supply"   // optional
         }
 
         Rules
@@ -149,9 +153,13 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
         • PARTIALLY_RECEIVED POs → received items' stock is REVERSED,
           then PO is cancelled
 
-        Response includes a list of items whose stock was reversed
-        so the frontend can show exactly what changed.
+        Response includes a list of items whose stock was reversed.
         """
+        # ── password gate ──────────────────────────────────────────────────
+        password_error = check_password_confirmation(request)
+        if password_error:
+            return password_error
+
         po     = self.get_object()
         reason = request.data.get('reason', '')
 
@@ -162,12 +170,12 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
 
         serializer = self.get_serializer(po)
         return Response({
-            'message':       'Purchase order cancelled successfully',
-            'po_number':     po.po_number,
-            'status':        po.status,
-            'cancelled_by':  request.user.get_full_name(),
-            'cancelled_at':  po.cancelled_at.isoformat(),
-            'reason':        po.cancellation_reason,
-            'stock_reversed': reversed_items,   # [] if PO was still PENDING
+            'message':        'Purchase order cancelled successfully',
+            'po_number':      po.po_number,
+            'status':         po.status,
+            'cancelled_by':   request.user.get_full_name(),
+            'cancelled_at':   po.cancelled_at.isoformat(),
+            'reason':         po.cancellation_reason,
+            'stock_reversed': reversed_items,
             'purchase_order': serializer.data,
         })
