@@ -69,7 +69,7 @@ class VendorAssignmentAdmin(admin.ModelAdmin):
         return False  # Cannot delete assignments
 
 
-# ============ QUOTATION ADMIN - UPDATED ==========
+# ============ QUOTATION ADMIN - UPDATED =========
 
 class VendorQuotationItemInline(admin.TabularInline):
     model = VendorQuotationItem
