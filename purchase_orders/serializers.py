@@ -5,6 +5,12 @@ from vendors.models import Vendor
 from collections import defaultdict
 
 
+class VendorBasicSerializer(serializers.ModelSerializer):
+    class Meta:
+        model  = Vendor
+        fields = ['phone', 'email', 'address', 'gst_number']
+
+
 class PurchaseOrderItemSerializer(serializers.ModelSerializer):
     product_name = serializers.CharField(source='product.item_name', read_only=True)
     product_code = serializers.CharField(source='product.item_code', read_only=True)
@@ -21,26 +27,26 @@ class PurchaseOrderItemSerializer(serializers.ModelSerializer):
 
 
 class PurchaseOrderSerializer(serializers.ModelSerializer):
-    items             = PurchaseOrderItemSerializer(many=True, read_only=True)
-    vendor_name       = serializers.CharField(source='vendor.vendor_name',             read_only=True)
-    requisition_number = serializers.CharField(source='requisition.requisition_number', read_only=True)
-    created_by_name   = serializers.CharField(source='created_by.get_full_name',       read_only=True)
-    cancelled_by_name = serializers.SerializerMethodField()
+    items                = PurchaseOrderItemSerializer(many=True, read_only=True)
+    vendor_details       = VendorBasicSerializer(source='vendor', read_only=True)
+    vendor_name          = serializers.CharField(source='vendor.vendor_name',          read_only=True)
+    requisition_number   = serializers.CharField(source='requisition.requisition_number', read_only=True)
+    created_by_name      = serializers.CharField(source='created_by.get_full_name',    read_only=True)
+    cancelled_by_name    = serializers.SerializerMethodField()
 
     class Meta:
         model  = PurchaseOrder
         fields = [
             'id', 'po_number', 'requisition', 'requisition_number',
-            'vendor', 'vendor_name', 'po_date', 'remarks',
-            # Amounts
-            'items_total', 'freight_cost', 'total_amount',
-            'status',
+            'vendor', 'vendor_name', 'vendor_details',               # ← ADD vendor_details
+            'po_date', 'remarks',
+            'total_amount', 'status',
             'cancellation_reason', 'cancelled_by', 'cancelled_by_name', 'cancelled_at',
             'created_by_name', 'items',
             'created_at', 'updated_at',
         ]
         read_only_fields = [
-            'id', 'po_number', 'items_total', 'total_amount',
+            'id', 'po_number', 'total_amount',
             'cancellation_reason', 'cancelled_by', 'cancelled_at',
             'created_at', 'updated_at',
         ]
@@ -54,29 +60,15 @@ class PurchaseOrderSerializer(serializers.ModelSerializer):
 class GeneratePOSerializer(serializers.Serializer):
     """
     Generate PO from comparison selections.
-    User selects quotation_item IDs and can specify an optional freight cost
-    per vendor group (one PO per vendor).
+    User selects quotation_item IDs from comparison.
     """
-    requisition  = serializers.UUIDField()
-    selections   = serializers.ListField(
+    requisition = serializers.UUIDField()
+    selections  = serializers.ListField(
         child=serializers.UUIDField(),
         help_text="List of quotation_item IDs"
     )
-    po_date      = serializers.DateField()
-    remarks      = serializers.CharField(required=False, allow_blank=True)
-
-    # Key addition: per-vendor freight costs
-    # Format: [{"vendor_id": "uuid", "freight_cost": 500.00}, ...]
-    # If a vendor is not listed here, freight defaults to 0.
-    freight_costs = serializers.ListField(
-        child=serializers.DictField(),
-        required=False,
-        default=list,
-        help_text=(
-            "Optional per-vendor freight costs. "
-            "Example: [{\"vendor_id\": \"uuid\", \"freight_cost\": 500.00}]"
-        )
-    )
+    po_date  = serializers.DateField()
+    remarks  = serializers.CharField(required=False, allow_blank=True)
 
     def validate_requisition(self, value):
         try:
@@ -97,29 +89,11 @@ class GeneratePOSerializer(serializers.Serializer):
 
         return value
 
-    def validate_freight_costs(self, value):
-        for entry in value:
-            if 'vendor_id' not in entry:
-                raise serializers.ValidationError("Each freight_costs entry must have 'vendor_id'")
-            if 'freight_cost' not in entry:
-                raise serializers.ValidationError("Each freight_costs entry must have 'freight_cost'")
-            try:
-                float(entry['freight_cost'])
-            except (TypeError, ValueError):
-                raise serializers.ValidationError("freight_cost must be a numeric value")
-        return value
-
     def create(self, validated_data):
-        from decimal import Decimal
+        selections  = validated_data['selections']
+        requisition = Requisition.objects.get(id=validated_data['requisition'])
 
-        selections    = validated_data['selections']
-        requisition   = Requisition.objects.get(id=validated_data['requisition'])
-        freight_map   = {
-            str(e['vendor_id']): Decimal(str(e['freight_cost']))
-            for e in validated_data.get('freight_costs', [])
-        }
-
-        # Group quotation items by vendor
+        # Group by vendor
         vendor_groups = defaultdict(list)
         for item_id in selections:
             q_item = VendorQuotationItem.objects.select_related(
@@ -131,16 +105,14 @@ class GeneratePOSerializer(serializers.Serializer):
         # Create one PO per vendor
         pos = []
         for vendor_id, items in vendor_groups.items():
-            vendor        = Vendor.objects.get(id=vendor_id)
-            freight_cost  = freight_map.get(str(vendor_id), Decimal('0'))
+            vendor = Vendor.objects.get(id=vendor_id)
 
             po = PurchaseOrder.objects.create(
-                requisition  = requisition,
-                vendor       = vendor,
-                po_date      = validated_data['po_date'],
-                remarks      = validated_data.get('remarks', ''),
-                freight_cost = freight_cost,
-                created_by   = validated_data['created_by']
+                requisition = requisition,
+                vendor      = vendor,
+                po_date     = validated_data['po_date'],
+                remarks     = validated_data.get('remarks', ''),
+                created_by  = validated_data['created_by']
             )
 
             for q_item in items:
@@ -152,7 +124,7 @@ class GeneratePOSerializer(serializers.Serializer):
                     rate           = q_item.quoted_rate
                 )
 
-            po.calculate_total()   # sets items_total and total_amount
+            po.calculate_total()
             pos.append(po)
 
         return pos
