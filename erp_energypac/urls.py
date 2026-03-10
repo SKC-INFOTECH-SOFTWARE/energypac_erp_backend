@@ -17,6 +17,7 @@ from purchase_orders.views import PurchaseOrderViewSet
 from dashboard.views import DashboardStatsView
 from work_orders.views import WorkOrderViewSet
 from billing.views import BillViewSet
+from inventory.views_bulk_upload import ProductBulkUploadView, ProductBulkUploadTemplateView
 from reports.views import (
     # Requisition Reports
     RequisitionReportView,
@@ -86,6 +87,9 @@ urlpatterns = [
     path('api/auth/refresh', TokenRefreshView.as_view(), name='token_refresh'),
     path('api/auth/profile', ProfileView.as_view(), name='profile'),
 
+    
+    path('api/products/bulk-upload',ProductBulkUploadView.as_view(), name='product-bulk-upload'),
+    path('api/products/bulk-upload-template', ProductBulkUploadTemplateView.as_view(), name='product-bulk-upload-template') ,
     # All API endpoints
     path('api/', include(router.urls)),
     path('api/dashboard/stats', DashboardStatsView.as_view(), name='dashboard-stats'),
@@ -202,4 +206,6 @@ urlpatterns = [
     path('api/dashboard/billing/stats',
         BillingDashboardStatsView.as_view(),
         name='dashboard-billing-stats'),
+
+
 ]
