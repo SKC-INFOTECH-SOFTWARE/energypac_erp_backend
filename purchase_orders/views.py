@@ -34,9 +34,9 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
     search_fields    = ['po_number', 'vendor__vendor_name']
     ordering         = ['-po_number']
 
-    # ──────────────────────────────────────────────────────────────────────────
+    # ───────────────────────────────────────────────────────────────────────
     # Create PO from quotation comparison
-    # ──────────────────────────────────────────────────────────────────────────
+    # ───────────────────────────────────────────────────────────────────────
 
     @action(detail=False, methods=['post'])
     def generate_from_comparison(self, request):
