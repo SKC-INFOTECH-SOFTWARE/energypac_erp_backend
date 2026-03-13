@@ -38,15 +38,18 @@ class PurchaseOrderSerializer(serializers.ModelSerializer):
         model  = PurchaseOrder
         fields = [
             'id', 'po_number', 'requisition', 'requisition_number',
-            'vendor', 'vendor_name', 'vendor_details',               # ← ADD vendor_details
+            'vendor', 'vendor_name', 'vendor_details',
             'po_date', 'remarks',
-            'total_amount', 'status',
+            'items_total', 'freight_cost', 'total_amount',
+            'amount_paid', 'balance',
+            'status',
             'cancellation_reason', 'cancelled_by', 'cancelled_by_name', 'cancelled_at',
             'created_by_name', 'items',
             'created_at', 'updated_at',
         ]
         read_only_fields = [
-            'id', 'po_number', 'total_amount',
+            'id', 'po_number', 'items_total', 'total_amount',
+            'amount_paid', 'balance',
             'cancellation_reason', 'cancelled_by', 'cancelled_at',
             'created_at', 'updated_at',
         ]

@@ -64,6 +64,15 @@ from billing.reports_views import (
     BillingDashboardStatsView,
 )
 
+# Finance app imports
+from finance.views import (
+    PurchaseOrderFinanceViewSet,
+    BillFinanceViewSet,
+    AllPurchasePaymentsListView,
+    AllIncomingPaymentsListView,
+    FinanceDashboardView,
+)
+
 
 
 # Create router
@@ -79,6 +88,12 @@ router.register(r'quotations', SalesQuotationViewSet, basename='sales-quotation'
 router.register(r'quotation-items', SalesQuotationItemViewSet, basename='quotation-item')
 router.register(r'work-orders', WorkOrderViewSet, basename='work-order')
 router.register(r'bills', BillViewSet, basename='bill')
+
+# Finance router
+finance_router = DefaultRouter(trailing_slash=False)
+finance_router.register(r'purchase-orders', PurchaseOrderFinanceViewSet, basename='finance-purchase-order')
+finance_router.register(r'bills', BillFinanceViewSet, basename='finance-bill')
+
 urlpatterns = [
     path('admin/', admin.site.urls),
 
@@ -100,7 +115,7 @@ urlpatterns = [
     path('api/docs', SpectacularSwaggerView.as_view(url_name='schema')),
     path('api/playground', SpectacularRedocView.as_view(url_name='schema')),
 
-# ===== REQUISITION REPORTS =====
+    # ===== REQUISITION REPORTS =====
     path('api/reports/requisitions',
          RequisitionReportView.as_view(),
          name='report-requisitions'),
@@ -207,5 +222,21 @@ urlpatterns = [
         BillingDashboardStatsView.as_view(),
         name='dashboard-billing-stats'),
 
+    # ===== FINANCE / ACCOUNTS =====
+    path('api/finance/', include(finance_router.urls)),
+
+    # Flat payment lists
+    path('api/finance/all-purchase-payments',
+        AllPurchasePaymentsListView.as_view(),
+        name='finance-all-purchase-payments'),
+
+    path('api/finance/all-incoming-payments',
+        AllIncomingPaymentsListView.as_view(),
+        name='finance-all-incoming-payments'),
+
+    # Finance dashboard
+    path('api/finance/dashboard',
+        FinanceDashboardView.as_view(),
+        name='finance-dashboard'),
 
 ]

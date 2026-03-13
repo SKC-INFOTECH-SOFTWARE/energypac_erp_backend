@@ -38,6 +38,16 @@ class PurchaseOrder(models.Model):
         help_text="items_total + freight_cost"
     )
 
+    # ── Payment tracking ──────────────────────────────────────────────────────
+    amount_paid = models.DecimalField(
+        max_digits=12, decimal_places=2, default=0,
+        help_text="Total amount paid to vendor (sum of all PurchasePayment rows, INR)"
+    )
+    balance = models.DecimalField(
+        max_digits=12, decimal_places=2, default=0,
+        help_text="Remaining balance (total_amount - amount_paid, INR)"
+    )
+
     status       = models.CharField(max_length=20, choices=STATUS_CHOICES, default='PENDING')
     created_by   = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT)
     created_at   = models.DateTimeField(auto_now_add=True)
@@ -77,9 +87,10 @@ class PurchaseOrder(models.Model):
         super().save(*args, **kwargs)
 
     def calculate_total(self):
-        """Recalculate items_total and total_amount (items + freight)."""
+        """Recalculate items_total, total_amount, and balance."""
         self.items_total = sum(item.amount for item in self.items.all())
         self.total_amount = self.items_total + self.freight_cost
+        self.balance = self.total_amount - self.amount_paid
         self.save()
 
     def update_status(self):
