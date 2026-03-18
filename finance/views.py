@@ -304,7 +304,7 @@ class BillFinanceViewSet(viewsets.ReadOnlyModelViewSet):
     ordering_fields    = ['bill_date', 'created_at', 'bill_number', 'balance']
     ordering           = ['-bill_number']
 
-    # ── Record incoming payment ──────────────────────────────────────────────
+    # ── Record incoming payment ────────────────────────────────────────────
 
     @action(detail=True, methods=['post'])
     @transaction.atomic
