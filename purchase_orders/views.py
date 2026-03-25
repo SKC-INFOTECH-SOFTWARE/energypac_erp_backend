@@ -63,7 +63,7 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
         )
 
     # ──────────────────────────────────────────────────────────────────────────
-    # Receive items
+    # Receive a single item
     # ──────────────────────────────────────────────────────────────────────────
 
     @action(detail=True, methods=['post'])
@@ -96,13 +96,23 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
         except ValueError as e:
             return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
+        # FIX: Refresh po from DB so po.status reflects the update_status()
+        # call that happened inside mark_as_purchased().
+        # Previously this was stale — if this was the last item, the response
+        # would show PARTIALLY_RECEIVED even though the DB had COMPLETED.
+        po.refresh_from_db()
+
         return Response({
             'message':   'Item marked as received',
             'product':   item.product.item_name,
-            'quantity':  item.quantity,
-            'new_stock': item.product.current_stock,
-            'po_status': po.status,
+            'quantity':  float(item.quantity),
+            'new_stock': float(item.product.current_stock),
+            'po_status': po.status,   # ← now always correct
         })
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # Receive all items
+    # ──────────────────────────────────────────────────────────────────────────
 
     @action(detail=True, methods=['post'])
     def mark_all_purchased(self, request, pk=None):
@@ -122,6 +132,7 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
         for item in po.items.filter(is_received=False):
             item.mark_as_purchased()
 
+        # Refresh to get the final status written by update_status()
         po.refresh_from_db()
         return Response({
             'message':   'All items marked as received',

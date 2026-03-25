@@ -88,24 +88,42 @@ class PurchaseOrder(models.Model):
 
     def calculate_total(self):
         """Recalculate items_total, total_amount, and balance."""
-        self.items_total = sum(item.amount for item in self.items.all())
+        self.items_total  = sum(item.amount for item in self.items.all())
         self.total_amount = self.items_total + self.freight_cost
-        self.balance = self.total_amount - self.amount_paid
+        self.balance      = self.total_amount - self.amount_paid
         self.save()
 
     def update_status(self):
-        """Recompute status from item receipts (skip if already CANCELLED)."""
+        """
+        Recompute status from item receipts and persist using a targeted
+        UPDATE (only touches the 'status' column — never overwrites
+        amount_paid, balance, or any other field).
+
+        FIX: Previously used self.save() which could overwrite stale
+        in-memory values for balance/amount_paid back to the DB.
+        """
+        # Never change a cancelled PO's status
         if self.status == 'CANCELLED':
             return
 
-        items = self.items.all()
-        if all(item.is_received for item in items):
-            self.status = 'COMPLETED'
-        elif any(item.is_received for item in items):
-            self.status = 'PARTIALLY_RECEIVED'
+        # Use DB counts — immune to any in-memory caching issues
+        total_items    = self.items.count()
+        received_items = self.items.filter(is_received=True).count()
+
+        if total_items > 0 and total_items == received_items:
+            new_status = 'COMPLETED'
+        elif received_items > 0:
+            new_status = 'PARTIALLY_RECEIVED'
         else:
-            self.status = 'PENDING'
-        self.save()
+            new_status = 'PENDING'
+
+        # Targeted SQL: UPDATE purchase_orders SET status=? WHERE id=?
+        # This guarantees no other column is touched.
+        PurchaseOrder.objects.filter(pk=self.pk).update(status=new_status)
+
+        # Keep the in-memory object consistent so callers get the right value
+        # after this call without needing an extra refresh_from_db().
+        self.status = new_status
 
     @transaction.atomic
     def cancel(self, cancelled_by_user, reason=''):
@@ -168,7 +186,13 @@ class PurchaseOrderItem(models.Model):
         super().save(*args, **kwargs)
 
     def mark_as_purchased(self):
-        """Update stock when item is received — blocked if PO is cancelled."""
+        """
+        Update stock when item is received.
+
+        FIX: After saving the item and calling update_status(), we refresh
+        self.po from DB so any caller holding this item's .po reference
+        sees the final correct status immediately.
+        """
         if self.po.status == 'CANCELLED':
             raise ValueError("Cannot receive items on a cancelled purchase order.")
 
@@ -179,6 +203,8 @@ class PurchaseOrderItem(models.Model):
             self.is_received = True
             self.save()
 
+            # update_status() now uses a targeted QuerySet.update()
+            # so it only writes the status column — safe to call here.
             self.po.update_status()
 
     def __str__(self):

@@ -21,6 +21,11 @@ class Bill(models.Model):
     ------------
     freight_cost is a flat charge added AFTER tax but BEFORE advance deduction:
         net_payable = total_amount + freight_cost - advance_deducted
+
+    Export Fields (optional — mainly for INTERNATIONAL bills)
+    ---------------------------------------------------------
+    importer_address, port_of_loading, port_of_discharge, final_destination,
+    pre_carriage_by, terms_of_delivery_payment, vessel_flight_no
     """
 
     BILL_TYPE_CHOICES = [
@@ -67,6 +72,36 @@ class Bill(models.Model):
     phone          = models.CharField(max_length=15, blank=True)
     email          = models.EmailField(blank=True)
     address        = models.TextField(blank=True)
+
+    # ── Export / International shipping fields (all optional) ─────────────────
+    importer_address = models.TextField(
+        blank=True,
+        help_text="Importer's address (for international / export bills)"
+    )
+    port_of_loading = models.CharField(
+        max_length=200, blank=True,
+        help_text="Port of loading"
+    )
+    port_of_discharge = models.CharField(
+        max_length=200, blank=True,
+        help_text="Port of discharge"
+    )
+    final_destination = models.CharField(
+        max_length=200, blank=True,
+        help_text="Final destination"
+    )
+    pre_carriage_by = models.CharField(
+        max_length=200, blank=True,
+        help_text="Pre-carriage by (mode of transport to loading port)"
+    )
+    terms_of_delivery_payment = models.CharField(
+        max_length=200, blank=True,
+        help_text="Terms of delivery/payment (e.g. CIF, FOB, DAP, EXW)"
+    )
+    vessel_flight_no = models.CharField(
+        max_length=100, blank=True,
+        help_text="Vessel name / flight number"
+    )
 
     # ── Financial amounts (always stored in INR) ──────────────────────────────
     subtotal = models.DecimalField(

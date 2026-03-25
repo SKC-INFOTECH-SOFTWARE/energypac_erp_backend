@@ -3,6 +3,7 @@ from .models import PurchasePayment, IncomingPayment
 from purchase_orders.models import PurchaseOrder, PurchaseOrderItem
 from billing.models import Bill, BillItem
 from work_orders.models import WorkOrder
+from decimal import Decimal
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -74,17 +75,21 @@ class POItemFinanceSerializer(serializers.ModelSerializer):
 
 class POFinanceSummarySerializer(serializers.ModelSerializer):
     """Purchase Order summary for the finance/accounts section."""
-    items           = POItemFinanceSerializer(many=True, read_only=True)
-    vendor_name     = serializers.CharField(source='vendor.vendor_name', read_only=True)
-    vendor_phone    = serializers.CharField(source='vendor.phone', read_only=True)
-    vendor_email    = serializers.CharField(source='vendor.email', read_only=True)
-    vendor_gst      = serializers.CharField(source='vendor.gst_number', read_only=True)
+    items              = POItemFinanceSerializer(many=True, read_only=True)
+    vendor_name        = serializers.CharField(source='vendor.vendor_name', read_only=True)
+    vendor_phone       = serializers.CharField(source='vendor.phone', read_only=True)
+    vendor_email       = serializers.CharField(source='vendor.email', read_only=True)
+    vendor_gst         = serializers.CharField(source='vendor.gst_number', read_only=True)
     requisition_number = serializers.CharField(source='requisition.requisition_number', read_only=True)
-    created_by_name = serializers.CharField(source='created_by.get_full_name', read_only=True)
-    payment_count   = serializers.SerializerMethodField()
+    created_by_name    = serializers.CharField(source='created_by.get_full_name', read_only=True)
+    payment_count      = serializers.SerializerMethodField()
     purchased_items_total = serializers.SerializerMethodField()
     purchased_items_count = serializers.SerializerMethodField()
     total_items_count     = serializers.SerializerMethodField()
+
+    # FIX (Issue 3): always compute balance from total_amount - amount_paid
+    # so old POs (where stored balance=0) show the correct outstanding amount
+    balance = serializers.SerializerMethodField()
 
     class Meta:
         model  = PurchaseOrder
@@ -100,6 +105,11 @@ class POFinanceSummarySerializer(serializers.ModelSerializer):
             'created_at', 'updated_at',
         ]
         read_only_fields = fields
+
+    def get_balance(self, obj):
+        """Always compute from live values — never trust the stored balance field."""
+        computed = obj.total_amount - obj.amount_paid
+        return float(max(computed, Decimal('0')))
 
     def get_payment_count(self, obj):
         return obj.purchase_payments.count()
@@ -140,6 +150,9 @@ class BillFinanceSummarySerializer(serializers.ModelSerializer):
     total_gst       = serializers.SerializerMethodField()
     payment_count   = serializers.SerializerMethodField()
 
+    # FIX (Issue 3): always compute balance from net_payable - amount_paid
+    balance = serializers.SerializerMethodField()
+
     class Meta:
         model  = Bill
         fields = [
@@ -157,6 +170,11 @@ class BillFinanceSummarySerializer(serializers.ModelSerializer):
             'created_at', 'updated_at',
         ]
         read_only_fields = fields
+
+    def get_balance(self, obj):
+        """Always compute from live values — never trust the stored balance field."""
+        computed = obj.net_payable - obj.amount_paid
+        return float(max(computed, Decimal('0')))
 
     def get_total_gst(self, obj):
         return float(obj.cgst_amount + obj.sgst_amount + obj.igst_amount)

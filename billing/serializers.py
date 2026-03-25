@@ -48,6 +48,18 @@ class BillItemSerializer(serializers.ModelSerializer):
 # Bill read serializer
 # ─────────────────────────────────────────────────────────────────────────────
 
+# Export field names grouped for reuse
+EXPORT_FIELDS = [
+    'importer_address',
+    'port_of_loading',
+    'port_of_discharge',
+    'final_destination',
+    'pre_carriage_by',
+    'terms_of_delivery_payment',
+    'vessel_flight_no',
+]
+
+
 class BillSerializer(serializers.ModelSerializer):
     items             = BillItemSerializer(many=True, read_only=True)
     payments          = BillPaymentSerializer(many=True, read_only=True)
@@ -64,7 +76,10 @@ class BillSerializer(serializers.ModelSerializer):
             'id', 'bill_number',
             'bill_type', 'bill_type_display',
             'work_order', 'wo_number', 'bill_date',
+            # Client details
             'client_name', 'contact_person', 'phone', 'email', 'address',
+            # Export / shipping fields (all optional)
+            *EXPORT_FIELDS,
             # Amounts (all INR)
             'subtotal',
             'cgst_percentage', 'sgst_percentage', 'igst_percentage',
@@ -118,6 +133,10 @@ class BillCreateSerializer(serializers.Serializer):
     ------
     bill_type    : 'DOMESTIC' (default) or 'INTERNATIONAL' — classification only.
     freight_cost : Flat freight/shipping charge in INR. Defaults to 0.
+
+    Export fields (all optional strings, mainly used for INTERNATIONAL bills):
+    importer_address, port_of_loading, port_of_discharge, final_destination,
+    pre_carriage_by, terms_of_delivery_payment, vessel_flight_no
     """
     work_order   = serializers.UUIDField(help_text="Work Order ID")
     bill_date    = serializers.DateField(input_formats=['%Y-%m-%d', '%d-%m-%Y'])
@@ -130,6 +149,16 @@ class BillCreateSerializer(serializers.Serializer):
         help_text="Flat freight/shipping charge in INR"
     )
     remarks = serializers.CharField(required=False, allow_blank=True)
+
+    # Optional export / shipping fields
+    importer_address          = serializers.CharField(required=False, allow_blank=True)
+    port_of_loading           = serializers.CharField(required=False, allow_blank=True, max_length=200)
+    port_of_discharge         = serializers.CharField(required=False, allow_blank=True, max_length=200)
+    final_destination         = serializers.CharField(required=False, allow_blank=True, max_length=200)
+    pre_carriage_by           = serializers.CharField(required=False, allow_blank=True, max_length=200)
+    terms_of_delivery_payment = serializers.CharField(required=False, allow_blank=True, max_length=200)
+    vessel_flight_no          = serializers.CharField(required=False, allow_blank=True, max_length=100)
+
     items   = serializers.ListField(
         child=BillItemInputSerializer(),
         help_text="List of items being delivered"
@@ -182,6 +211,9 @@ class BillCreateSerializer(serializers.Serializer):
         bill_type    = validated_data.pop('bill_type', 'DOMESTIC')
         freight_cost = validated_data.pop('freight_cost', Decimal('0'))
 
+        # Extract export fields (default to empty string if not provided)
+        export_kwargs = {field: validated_data.pop(field, '') for field in EXPORT_FIELDS}
+
         bill = Bill.objects.create(
             work_order     = work_order,
             bill_date      = validated_data['bill_date'],
@@ -194,6 +226,7 @@ class BillCreateSerializer(serializers.Serializer):
             address        = work_order.address,
             remarks        = validated_data.get('remarks', ''),
             created_by     = created_by,
+            **export_kwargs,
         )
 
         for item_data in items_data:

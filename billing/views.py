@@ -7,6 +7,7 @@ from decimal import Decimal
 from datetime import date as date_type, datetime
 
 from .models import Bill, BillItem, BillPayment
+from finance.models import IncomingPayment
 from .serializers import (
     BillSerializer,
     BillCreateSerializer,
@@ -183,6 +184,21 @@ class BillViewSet(viewsets.ModelViewSet):
         payment = BillPayment.objects.create(
             bill             = bill,
             payment_number   = payment_number,
+            amount           = amount_paid_now,
+            payment_date     = payment_date,
+            payment_mode     = payment_mode,
+            reference_number = reference_num,
+            remarks          = remarks,
+            total_paid_after = bill.amount_paid,
+            balance_after    = bill.balance,
+            recorded_by      = request.user,
+        )
+
+        # Sync to finance app so the finance dashboard picks it up
+        incoming_payment_number = bill.incoming_payments.count() + 1
+        IncomingPayment.objects.create(
+            bill             = bill,
+            payment_number   = incoming_payment_number,
             amount           = amount_paid_now,
             payment_date     = payment_date,
             payment_mode     = payment_mode,
