@@ -8,7 +8,7 @@ from drf_spectacular.views import (
     SpectacularRedocView,
 )
 # Import views
-from accounts.views import LoginView, ProfileView
+from accounts.views import LoginView, ProfileView, AdminUserViewSet
 from inventory.views import ProductViewSet
 from vendors.views import VendorViewSet
 from requisitions.views import RequisitionViewSet, VendorAssignmentViewSet
@@ -89,6 +89,10 @@ router.register(r'quotation-items', SalesQuotationItemViewSet, basename='quotati
 router.register(r'work-orders', WorkOrderViewSet, basename='work-order')
 router.register(r'bills', BillViewSet, basename='bill')
 
+# Admin router
+admin_router = DefaultRouter(trailing_slash=False)
+admin_router.register(r'users', AdminUserViewSet, basename='admin-user')
+
 # Finance router
 finance_router = DefaultRouter(trailing_slash=False)
 finance_router.register(r'purchase-orders', PurchaseOrderFinanceViewSet, basename='finance-purchase-order')
@@ -101,6 +105,9 @@ urlpatterns = [
     path('api/auth/login', LoginView.as_view(), name='login'),
     path('api/auth/refresh', TokenRefreshView.as_view(), name='token_refresh'),
     path('api/auth/profile', ProfileView.as_view(), name='profile'),
+
+    # Admin endpoints
+    path('api/admin/', include(admin_router.urls)),
 
     
     path('api/products/bulk-upload',ProductBulkUploadView.as_view(), name='product-bulk-upload'),

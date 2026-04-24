@@ -4,6 +4,7 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from django_filters.rest_framework import DjangoFilterBackend
 
+from core.permissions import PurchaseModulePermission
 from .models import (Requisition, VendorRequisitionAssignment, VendorQuotation)
 from .serializers import (
     RequisitionSerializer,
@@ -23,6 +24,7 @@ class RequisitionViewSet(viewsets.ModelViewSet):
     """
     ViewSet for Requisition CRUD
     """
+    permission_classes = [PurchaseModulePermission]
     queryset = Requisition.objects.all().select_related('created_by').prefetch_related('items__product')
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     filterset_fields = ['is_assigned', 'requisition_date', 'created_by']
@@ -129,6 +131,7 @@ class RequisitionViewSet(viewsets.ModelViewSet):
 
 # ====================== VendorAssignmentViewSet ======================
 class VendorAssignmentViewSet(viewsets.ModelViewSet):
+    permission_classes = [PurchaseModulePermission]
     queryset = VendorRequisitionAssignment.objects.all().select_related(
         'requisition', 'vendor', 'assigned_by'
     ).prefetch_related('items__product')
@@ -172,6 +175,7 @@ class VendorAssignmentViewSet(viewsets.ModelViewSet):
 
 # ====================== VendorQuotationViewSet ======================
 class VendorQuotationViewSet(viewsets.ModelViewSet):
+    permission_classes = [PurchaseModulePermission]
     queryset = VendorQuotation.objects.all().select_related(
         'assignment__vendor', 'assignment__requisition', 'created_by'
     ).prefetch_related('items__product')

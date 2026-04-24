@@ -9,6 +9,7 @@ from drf_spectacular.utils import extend_schema, OpenApiParameter, OpenApiTypes,
 from rest_framework import serializers as drf_serializers
 import os
 
+from core.permissions import SalesModulePermission
 from .models import ClientQuery, SalesQuotation, SalesQuotationItem
 from .serializers import (
     ClientQuerySerializer,
@@ -28,6 +29,7 @@ class ClientQueryViewSet(viewsets.ModelViewSet):
     - Track query status
     - Link to quotations
     """
+    permission_classes = [SalesModulePermission]
     queryset = ClientQuery.objects.all().select_related('created_by')
     parser_classes = (MultiPartParser, FormParser, JSONParser)
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
@@ -116,6 +118,7 @@ class ClientQueryViewSet(viewsets.ModelViewSet):
 
 
 class SalesQuotationViewSet(viewsets.ModelViewSet):
+    permission_classes = [SalesModulePermission]
     """
     ViewSet for Sales Quotation CRUD operations
 
@@ -377,6 +380,7 @@ class SalesQuotationItemViewSet(viewsets.ModelViewSet):
     ViewSet for managing individual quotation items.
     Allows adding / updating / removing items after quotation creation.
     """
+    permission_classes = [SalesModulePermission]
     queryset = SalesQuotationItem.objects.all().select_related('quotation', 'product')
     filter_backends  = [DjangoFilterBackend, filters.SearchFilter]
     filterset_fields = ['quotation', 'product']

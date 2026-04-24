@@ -5,6 +5,7 @@ from django_filters.rest_framework import DjangoFilterBackend
 from django.db.models import Sum, F
 from decimal import Decimal
 
+from core.permissions import SalesModulePermission
 from .models import WorkOrder, WorkOrderItem
 from .serializers import (
     WorkOrderSerializer,
@@ -17,6 +18,7 @@ from .serializers import (
 
 
 class WorkOrderViewSet(viewsets.ModelViewSet):
+    permission_classes = [SalesModulePermission]
     """
     ViewSet for Work Order CRUD operations
 

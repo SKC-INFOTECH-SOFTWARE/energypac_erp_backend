@@ -6,9 +6,11 @@ from django_filters.rest_framework import DjangoFilterBackend
 from .models import PurchaseOrder, PurchaseOrderItem
 from .serializers import PurchaseOrderSerializer, GeneratePOSerializer
 from core.password_confirm import check_password_confirmation
+from core.permissions import PurchaseModulePermission
 
 
 class PurchaseOrderViewSet(viewsets.ModelViewSet):
+    permission_classes = [PurchaseModulePermission]
     """
     Purchase Order APIs
 

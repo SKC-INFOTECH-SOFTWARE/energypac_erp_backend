@@ -8,6 +8,7 @@ from django.db.models import Sum, Q, Count, F
 from decimal import Decimal
 from datetime import date as date_type, datetime
 
+from core.permissions import FinanceModulePermission
 from .models import PurchasePayment, IncomingPayment
 from .serializers import (
     PurchasePaymentSerializer,
@@ -22,6 +23,7 @@ from core.password_confirm import check_password_confirmation
 
 
 class PurchaseOrderFinanceViewSet(viewsets.ReadOnlyModelViewSet):
+    permission_classes = [FinanceModulePermission]
     queryset = PurchaseOrder.objects.all().select_related(
         'requisition', 'vendor', 'created_by'
     ).prefetch_related('items__product', 'purchase_payments__recorded_by')
@@ -236,6 +238,7 @@ class PurchaseOrderFinanceViewSet(viewsets.ReadOnlyModelViewSet):
 
 
 class BillFinanceViewSet(viewsets.ReadOnlyModelViewSet):
+    permission_classes = [FinanceModulePermission]
     queryset = Bill.objects.all().select_related(
         'work_order', 'created_by'
     ).prefetch_related('items__product', 'incoming_payments__recorded_by')
@@ -439,6 +442,7 @@ class BillFinanceViewSet(viewsets.ReadOnlyModelViewSet):
 
 
 class AllPurchasePaymentsListView(generics.ListAPIView):
+    permission_classes = [FinanceModulePermission]
     queryset = PurchasePayment.objects.all().select_related('purchase_order__vendor', 'recorded_by')
     serializer_class = PurchasePaymentSerializer
     filter_backends  = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
@@ -449,6 +453,7 @@ class AllPurchasePaymentsListView(generics.ListAPIView):
 
 
 class AllIncomingPaymentsListView(generics.ListAPIView):
+    permission_classes = [FinanceModulePermission]
     queryset = IncomingPayment.objects.all().select_related('bill__work_order', 'recorded_by')
     serializer_class = IncomingPaymentSerializer
     filter_backends  = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
@@ -459,6 +464,8 @@ class AllIncomingPaymentsListView(generics.ListAPIView):
 
 
 class FinanceDashboardView(APIView):
+    permission_classes = [FinanceModulePermission]
+
     def get(self, request):
         total_po_value = PurchaseOrder.objects.exclude(status='CANCELLED').aggregate(total=Sum('total_amount'))['total'] or Decimal('0')
         total_paid_to_vendors = PurchaseOrder.objects.exclude(status='CANCELLED').aggregate(total=Sum('amount_paid'))['total'] or Decimal('0')

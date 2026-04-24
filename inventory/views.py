@@ -7,9 +7,11 @@ from django.db import models
 from .models import Product
 from .serializers import ProductSerializer
 from core.password_confirm import PasswordConfirmDestroyMixin
+from core.permissions import MasterModulePermission
 
 
 class ProductViewSet(PasswordConfirmDestroyMixin, viewsets.ModelViewSet):
+    permission_classes = [MasterModulePermission]
     """
     ViewSet for Product CRUD operations
 

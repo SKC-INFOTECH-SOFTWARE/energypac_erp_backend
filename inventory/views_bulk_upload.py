@@ -13,13 +13,14 @@ from rest_framework.parsers import MultiPartParser
 from rest_framework import status
 
 from .models import Product
+from core.permissions import MasterModulePermission
 
 
 class ProductBulkUploadTemplateView(APIView):
     """
     GET /api/inventory/products/bulk-upload-template/
     """
-    permission_classes = [IsAuthenticated]
+    permission_classes = [MasterModulePermission]
 
     def get(self, request):
         wb = Workbook()
@@ -106,7 +107,7 @@ class ProductBulkUploadView(APIView):
         ]
     }
     """
-    permission_classes = [IsAuthenticated]
+    permission_classes = [MasterModulePermission]
     parser_classes     = [MultiPartParser]
 
     def post(self, request):

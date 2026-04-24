@@ -6,6 +6,7 @@ from django.db import transaction
 from decimal import Decimal
 from datetime import date as date_type, datetime
 
+from core.permissions import SalesModulePermission
 from .models import Bill, BillItem, BillPayment
 from finance.models import IncomingPayment
 from .serializers import (
@@ -19,6 +20,7 @@ from core.password_confirm import check_password_confirmation, require_password_
 
 
 class BillViewSet(viewsets.ModelViewSet):
+    permission_classes = [SalesModulePermission]
     """
     ViewSet for Bill CRUD operations. All amounts are in INR.
 

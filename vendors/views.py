@@ -6,9 +6,11 @@ from django_filters.rest_framework import DjangoFilterBackend
 from .models import Vendor
 from .serializers import VendorSerializer
 from core.password_confirm import PasswordConfirmDestroyMixin
+from core.permissions import MasterModulePermission
 
 
 class VendorViewSet(PasswordConfirmDestroyMixin, viewsets.ModelViewSet):
+    permission_classes = [MasterModulePermission]
     """
     ViewSet for Vendor CRUD operations
 
