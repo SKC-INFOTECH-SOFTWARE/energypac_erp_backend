@@ -10,7 +10,9 @@
       "Bash(rm -rf venv)",
       "Bash(py -3.12 -m venv venv)",
       "Bash(curl -s http://127.0.0.1:8000/api/auth/login -X POST -H \"Content-Type: application/json\" -d '{\"employee_code\":\"ADMIN001\",\"password\":\"admin@123\"}')",
-      "Bash(python -m json.tool)"
+      "Bash(python -m json.tool)",
+      "Bash(xargs ls *)",
+      "Bash(python *)"
     ]
   }
 }

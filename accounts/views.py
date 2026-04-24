@@ -1,16 +1,22 @@
 from rest_framework import generics, permissions, viewsets, filters, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
+from rest_framework.views import APIView
 from rest_framework_simplejwt.views import TokenObtainPairView
 from django_filters.rest_framework import DjangoFilterBackend
+from django.core.mail import send_mail
+from django.conf import settings
 
-from .models import User, UserModulePermission, MODULE_CHOICES
+from .models import User, UserModulePermission, MODULE_CHOICES, PasswordResetOTP
 from .serializers import (
     CustomTokenObtainPairSerializer,
     UserSerializer,
     UserModulePermissionSerializer,
     AdminUserCreateSerializer,
     AdminUserUpdateSerializer,
+    ForgotPasswordSerializer,
+    VerifyOTPSerializer,
+    ResetPasswordSerializer,
 )
 from core.permissions import IsAdmin
 
@@ -18,6 +24,68 @@ from core.permissions import IsAdmin
 class LoginView(TokenObtainPairView):
     serializer_class = CustomTokenObtainPairSerializer
     permission_classes = [permissions.AllowAny]
+
+
+class ForgotPasswordView(APIView):
+    permission_classes = [permissions.AllowAny]
+
+    def post(self, request):
+        serializer = ForgotPasswordSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        email = serializer.validated_data['email']
+        user = User.objects.get(email=email, is_active=True)
+        otp_record = PasswordResetOTP.generate_otp(user)
+
+        send_mail(
+            subject='Password Reset OTP - EnergyPac ERP',
+            message=f'Your OTP for password reset is: {otp_record.otp}\n\nThis OTP is valid for 10 minutes.\n\nIf you did not request this, please ignore this email.',
+            from_email=settings.DEFAULT_FROM_EMAIL,
+            recipient_list=[email],
+            fail_silently=False,
+        )
+
+        return Response({
+            'message': 'OTP sent to your email address.',
+            'email': email,
+        })
+
+
+class VerifyOTPView(APIView):
+    permission_classes = [permissions.AllowAny]
+
+    def post(self, request):
+        serializer = VerifyOTPSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        otp_record = serializer.validated_data['otp_record']
+        otp_record.is_verified = True
+        otp_record.save()
+
+        return Response({
+            'message': 'OTP verified successfully.',
+            'email': serializer.validated_data['email'],
+        })
+
+
+class ResetPasswordView(APIView):
+    permission_classes = [permissions.AllowAny]
+
+    def post(self, request):
+        serializer = ResetPasswordSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        user = serializer.validated_data['user']
+        otp_record = serializer.validated_data['otp_record']
+
+        user.set_password(serializer.validated_data['new_password'])
+        user.save()
+
+        otp_record.delete()
+
+        return Response({
+            'message': 'Password reset successfully. You can now login with your new password.',
+        })
 
 
 class ProfileView(generics.RetrieveAPIView):

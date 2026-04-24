@@ -8,7 +8,10 @@ from drf_spectacular.views import (
     SpectacularRedocView,
 )
 # Import views
-from accounts.views import LoginView, ProfileView, AdminUserViewSet
+from accounts.views import (
+    LoginView, ProfileView, AdminUserViewSet,
+    ForgotPasswordView, VerifyOTPView, ResetPasswordView,
+)
 from inventory.views import ProductViewSet
 from vendors.views import VendorViewSet
 from requisitions.views import RequisitionViewSet, VendorAssignmentViewSet
@@ -105,6 +108,9 @@ urlpatterns = [
     path('api/auth/login', LoginView.as_view(), name='login'),
     path('api/auth/refresh', TokenRefreshView.as_view(), name='token_refresh'),
     path('api/auth/profile', ProfileView.as_view(), name='profile'),
+    path('api/auth/forgot-password', ForgotPasswordView.as_view(), name='forgot-password'),
+    path('api/auth/verify-otp', VerifyOTPView.as_view(), name='verify-otp'),
+    path('api/auth/reset-password', ResetPasswordView.as_view(), name='reset-password'),
 
     # Admin endpoints
     path('api/admin/', include(admin_router.urls)),

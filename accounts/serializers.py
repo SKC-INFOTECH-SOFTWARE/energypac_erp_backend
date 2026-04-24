@@ -1,6 +1,6 @@
 from rest_framework import serializers
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
-from .models import User, UserModulePermission, MODULE_CHOICES
+from .models import User, UserModulePermission, MODULE_CHOICES, PasswordResetOTP
 
 
 class UserModulePermissionSerializer(serializers.ModelSerializer):
@@ -158,3 +158,71 @@ class AdminUserUpdateSerializer(serializers.ModelSerializer):
                     UserModulePermission.objects.create(user=instance, **perm_data)
 
         return instance
+
+
+# ─── Forgot Password Serializers ─────────────────────────────────────────────
+
+class ForgotPasswordSerializer(serializers.Serializer):
+    email = serializers.EmailField()
+
+    def validate_email(self, value):
+        if not User.objects.filter(email=value, is_active=True).exists():
+            raise serializers.ValidationError("No active account found with this email.")
+        return value
+
+
+class VerifyOTPSerializer(serializers.Serializer):
+    email = serializers.EmailField()
+    otp = serializers.CharField(max_length=6, min_length=6)
+
+    def validate(self, data):
+        try:
+            user = User.objects.get(email=data['email'], is_active=True)
+        except User.DoesNotExist:
+            raise serializers.ValidationError("No active account found with this email.")
+
+        otp_record = PasswordResetOTP.objects.filter(
+            user=user, otp=data['otp'], is_verified=False
+        ).first()
+
+        if not otp_record:
+            raise serializers.ValidationError("Invalid OTP.")
+
+        if otp_record.is_expired:
+            otp_record.delete()
+            raise serializers.ValidationError("OTP has expired. Please request a new one.")
+
+        data['otp_record'] = otp_record
+        data['user'] = user
+        return data
+
+
+class ResetPasswordSerializer(serializers.Serializer):
+    email = serializers.EmailField()
+    otp = serializers.CharField(max_length=6, min_length=6)
+    new_password = serializers.CharField(min_length=6)
+    confirm_password = serializers.CharField(min_length=6)
+
+    def validate(self, data):
+        if data['new_password'] != data['confirm_password']:
+            raise serializers.ValidationError({"confirm_password": "Passwords do not match."})
+
+        try:
+            user = User.objects.get(email=data['email'], is_active=True)
+        except User.DoesNotExist:
+            raise serializers.ValidationError("No active account found with this email.")
+
+        otp_record = PasswordResetOTP.objects.filter(
+            user=user, otp=data['otp'], is_verified=True
+        ).first()
+
+        if not otp_record:
+            raise serializers.ValidationError("OTP not verified. Please verify OTP first.")
+
+        if otp_record.is_expired:
+            otp_record.delete()
+            raise serializers.ValidationError("OTP has expired. Please request a new one.")
+
+        data['user'] = user
+        data['otp_record'] = otp_record
+        return data
