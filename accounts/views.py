@@ -34,12 +34,36 @@ class ForgotPasswordView(APIView):
         serializer.is_valid(raise_exception=True)
 
         email = serializer.validated_data['email']
-        user = User.objects.get(email=email, is_active=True)
+        try:
+            user = User.objects.get(email=email, is_active=True)
+        except User.DoesNotExist:
+            return Response({
+                'error': 'No active account found with this email.'
+            }, status=status.HTTP_404_NOT_FOUND)
+
         otp_record = PasswordResetOTP.generate_otp(user)
 
         send_mail(
             subject='Password Reset OTP - EnergyPac ERP',
-            message=f'Your OTP for password reset is: {otp_record.otp}\n\nThis OTP is valid for 10 minutes.\n\nIf you did not request this, please ignore this email.',
+            message=f'''Dear {user.get_full_name() or user.username},
+
+You have requested to reset your password for EnergyPac ERP.
+
+Your One-Time Password (OTP) is:
+
+    {otp_record.otp}
+
+This OTP is valid for 10 minutes only. Please do not share this OTP with anyone.
+
+Steps to reset your password:
+1. Go to the password reset page
+2. Enter this OTP
+3. Enter your new password
+
+If you did not request this, please ignore this email.
+
+Best regards,
+EnergyPac ERP Team''',
             from_email=settings.DEFAULT_FROM_EMAIL,
             recipient_list=[email],
             fail_silently=False,

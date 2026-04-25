@@ -1,5 +1,7 @@
 from rest_framework import serializers
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
+from django.core.mail import send_mail
+from django.conf import settings
 from .models import User, UserModulePermission, MODULE_CHOICES, PasswordResetOTP
 
 
@@ -111,6 +113,26 @@ class AdminUserCreateSerializer(serializers.ModelSerializer):
                     perm_data['can_read'] = True
                 UserModulePermission.objects.create(user=user, **perm_data)
 
+        send_mail(
+            subject='Your Account is Registered - EnergyPac ERP',
+            message=f'''Dear {user.get_full_name() or user.username},
+
+Your account has been successfully registered in EnergyPac ERP.
+
+Account Details:
+- Email: {user.email}
+- Employee Code: {user.employee_code}
+- Username: {user.username}
+
+This email will be used for account recovery if you forget your password. You can use the "Forgot Password" feature to reset your password anytime.
+
+Best regards,
+EnergyPac ERP Team''',
+            from_email=settings.DEFAULT_FROM_EMAIL,
+            recipient_list=[user.email],
+            fail_silently=False,
+        )
+
         return user
 
 
@@ -166,7 +188,8 @@ class ForgotPasswordSerializer(serializers.Serializer):
     email = serializers.EmailField()
 
     def validate_email(self, value):
-        if not User.objects.filter(email=value, is_active=True).exists():
+        user = User.objects.filter(email=value, is_active=True).first()
+        if not user:
             raise serializers.ValidationError("No active account found with this email.")
         return value
 
