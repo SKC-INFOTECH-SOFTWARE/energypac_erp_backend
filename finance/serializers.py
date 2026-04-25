@@ -7,7 +7,7 @@ from decimal import Decimal
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Purchase Payment Serializers (Outgoing)
+# Purchase Payment Serializers (Outgoing payments to vendors)
 # ─────────────────────────────────────────────────────────────────────────────
 
 class PurchasePaymentSerializer(serializers.ModelSerializer):
