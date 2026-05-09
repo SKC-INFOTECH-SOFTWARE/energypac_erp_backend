@@ -34,13 +34,15 @@ class BillItemSerializer(serializers.ModelSerializer):
             'id', 'work_order_item', 'product', 'item_code', 'item_name',
             'description', 'hsn_code', 'unit', 'ordered_quantity',
             'previously_delivered_quantity', 'delivered_quantity',
-            'pending_quantity', 'rate', 'amount', 'remarks',
+            'pending_quantity', 'rate', 'amount',
+            'original_rate', 'original_amount',
+            'remarks',
         ]
         read_only_fields = [
             'id', 'product', 'item_code', 'item_name', 'description',
             'hsn_code', 'unit', 'ordered_quantity',
             'previously_delivered_quantity', 'pending_quantity',
-            'rate', 'amount',
+            'rate', 'amount', 'original_rate', 'original_amount',
         ]
 
 
@@ -80,7 +82,9 @@ class BillSerializer(serializers.ModelSerializer):
             'client_name', 'contact_person', 'phone', 'email', 'address',
             # Export / shipping fields (all optional)
             *EXPORT_FIELDS,
-            # Amounts (all INR)
+            # Currency
+            'currency', 'exchange_rate',
+            # Amounts (INR)
             'subtotal',
             'cgst_percentage', 'sgst_percentage', 'igst_percentage',
             'cgst_amount',     'sgst_amount',     'igst_amount',
@@ -89,6 +93,10 @@ class BillSerializer(serializers.ModelSerializer):
             'freight_cost',
             'advance_deducted', 'net_payable',
             'amount_paid', 'balance',
+            # Original currency amounts
+            'original_subtotal',
+            'original_cgst_amount', 'original_sgst_amount', 'original_igst_amount',
+            'original_total_amount', 'original_freight_cost', 'original_net_payable',
             # Meta
             'payment_count', 'remarks', 'status',
             'created_by', 'created_by_name', 'total_items',
@@ -96,9 +104,13 @@ class BillSerializer(serializers.ModelSerializer):
             'created_at', 'updated_at',
         ]
         read_only_fields = [
-            'id', 'bill_number', 'subtotal',
+            'id', 'bill_number', 'currency', 'exchange_rate',
+            'subtotal',
             'cgst_amount', 'sgst_amount', 'igst_amount',
             'total_amount', 'advance_deducted', 'net_payable',
+            'original_subtotal',
+            'original_cgst_amount', 'original_sgst_amount', 'original_igst_amount',
+            'original_total_amount', 'original_freight_cost', 'original_net_payable',
             'balance', 'created_at', 'updated_at',
         ]
 
@@ -218,6 +230,8 @@ class BillCreateSerializer(serializers.Serializer):
             work_order     = work_order,
             bill_date      = validated_data['bill_date'],
             bill_type      = bill_type,
+            currency       = work_order.currency,
+            exchange_rate  = work_order.exchange_rate,
             freight_cost   = freight_cost,
             client_name    = work_order.client_name,
             contact_person = work_order.contact_person,

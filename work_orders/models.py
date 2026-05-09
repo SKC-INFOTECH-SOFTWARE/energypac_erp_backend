@@ -2,6 +2,7 @@ from django.db import models
 from django.conf import settings
 from sales.models import SalesQuotation, SalesQuotationItem
 from inventory.models import Product
+from core.models import CURRENCY_CHOICES
 import uuid
 from datetime import datetime
 from decimal import Decimal
@@ -38,6 +39,16 @@ class WorkOrder(models.Model):
 
     wo_date = models.DateField(help_text="Work order date")
 
+    # ── Currency (inherited from Sales Quotation) ─────────────────────────
+    currency = models.CharField(
+        max_length=3, choices=CURRENCY_CHOICES, default='INR',
+        help_text="Currency inherited from sales quotation"
+    )
+    exchange_rate = models.DecimalField(
+        max_digits=10, decimal_places=4, default=1,
+        help_text="USD to INR rate (1 if INR)"
+    )
+
     # Client details (copied from quotation)
     client_name = models.CharField(max_length=200)
     contact_person = models.CharField(max_length=100, blank=True)
@@ -65,7 +76,20 @@ class WorkOrder(models.Model):
         max_digits=12,
         decimal_places=2,
         default=0,
-        help_text="Subtotal + all taxes"
+        help_text="Subtotal + all taxes (INR)"
+    )
+
+    # ── Original currency amounts ────────────────────────────────────────
+    original_subtotal = models.DecimalField(
+        max_digits=12, decimal_places=2, default=0,
+        help_text="Subtotal in original currency"
+    )
+    original_cgst_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    original_sgst_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    original_igst_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    original_total_amount = models.DecimalField(
+        max_digits=12, decimal_places=2, default=0,
+        help_text="Total in original currency"
     )
 
     # Advance payment tracking
@@ -206,13 +230,23 @@ class WorkOrderItem(models.Model):
     rate = models.DecimalField(
         max_digits=10,
         decimal_places=2,
-        help_text="Rate per unit"
+        help_text="Rate per unit (INR)"
     )
 
     amount = models.DecimalField(
         max_digits=12,
         decimal_places=2,
-        help_text="ordered_quantity × rate"
+        help_text="ordered_quantity × rate (INR)"
+    )
+
+    # ── Original currency amounts ────────────────────────────────────────
+    original_rate = models.DecimalField(
+        max_digits=10, decimal_places=2, default=0,
+        help_text="Rate in original currency"
+    )
+    original_amount = models.DecimalField(
+        max_digits=12, decimal_places=2, default=0,
+        help_text="Amount in original currency"
     )
 
     # Stock status (snapshot at WO creation time)
@@ -236,13 +270,17 @@ class WorkOrderItem(models.Model):
         verbose_name_plural = 'Work Order Items'
 
     def save(self, *args, **kwargs):
-        # Calculate amount
         self.amount = self.ordered_quantity * self.rate
-
-        # Calculate pending quantity
         self.pending_quantity = self.ordered_quantity - self.delivered_quantity
 
-        # Check current stock if product exists
+        currency = self.work_order.currency
+        if currency == 'USD' and self.work_order.exchange_rate:
+            self.original_rate = self.original_rate or (self.rate / self.work_order.exchange_rate)
+            self.original_amount = self.ordered_quantity * self.original_rate
+        else:
+            self.original_rate = self.rate
+            self.original_amount = self.amount
+
         if self.product:
             current_stock = self.product.current_stock
             self.stock_available = current_stock >= self.ordered_quantity

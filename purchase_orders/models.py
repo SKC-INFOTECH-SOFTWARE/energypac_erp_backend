@@ -3,7 +3,9 @@ from django.conf import settings
 from inventory.models import Product
 from vendors.models import Vendor
 from requisitions.models import Requisition, VendorQuotationItem
+from core.models import CURRENCY_CHOICES
 import uuid
+from decimal import Decimal
 from datetime import datetime
 
 
@@ -24,7 +26,17 @@ class PurchaseOrder(models.Model):
     po_date      = models.DateField()
     remarks      = models.TextField(blank=True)
 
-    # ── Amounts ───────────────────────────────────────────────────────────────
+    # ── Currency ──────────────────────────────────────────────────────────────
+    currency = models.CharField(
+        max_length=3, choices=CURRENCY_CHOICES, default='INR',
+        help_text="Currency inherited from vendor quotation"
+    )
+    exchange_rate = models.DecimalField(
+        max_digits=10, decimal_places=4, default=1,
+        help_text="USD to INR rate at time of PO (1 if INR)"
+    )
+
+    # ── Amounts (always INR) ─────────────────────────────────────────────────
     items_total  = models.DecimalField(
         max_digits=12, decimal_places=2, default=0,
         help_text="Sum of all line-item amounts (qty × rate)"
@@ -36,6 +48,20 @@ class PurchaseOrder(models.Model):
     total_amount = models.DecimalField(
         max_digits=12, decimal_places=2, default=0,
         help_text="items_total + freight_cost"
+    )
+
+    # ── Original currency amounts ────────────────────────────────────────────
+    original_items_total = models.DecimalField(
+        max_digits=12, decimal_places=2, default=0,
+        help_text="Items total in original currency"
+    )
+    original_freight_cost = models.DecimalField(
+        max_digits=12, decimal_places=2, default=0,
+        help_text="Freight cost in original currency"
+    )
+    original_total_amount = models.DecimalField(
+        max_digits=12, decimal_places=2, default=0,
+        help_text="Total in original currency"
     )
 
     # ── Payment tracking ──────────────────────────────────────────────────────
@@ -91,6 +117,20 @@ class PurchaseOrder(models.Model):
         self.items_total  = sum(item.amount for item in self.items.all())
         self.total_amount = self.items_total + self.freight_cost
         self.balance      = self.total_amount - self.amount_paid
+
+        if self.currency == 'USD' and self.exchange_rate:
+            self.original_items_total = sum(
+                item.original_amount for item in self.items.all()
+            )
+            self.original_freight_cost = self.original_freight_cost or (
+                self.freight_cost / self.exchange_rate if self.exchange_rate else self.freight_cost
+            )
+            self.original_total_amount = self.original_items_total + self.original_freight_cost
+        else:
+            self.original_items_total = self.items_total
+            self.original_freight_cost = self.freight_cost
+            self.original_total_amount = self.total_amount
+
         self.save()
 
     def update_status(self):
@@ -174,8 +214,19 @@ class PurchaseOrderItem(models.Model):
     quotation_item = models.ForeignKey(VendorQuotationItem, on_delete=models.PROTECT)
     product        = models.ForeignKey(Product, on_delete=models.PROTECT)
     quantity       = models.DecimalField(max_digits=10, decimal_places=2)
-    rate           = models.DecimalField(max_digits=10, decimal_places=2)
-    amount         = models.DecimalField(max_digits=12, decimal_places=2)
+    rate           = models.DecimalField(max_digits=10, decimal_places=2, help_text="Rate in INR")
+    amount         = models.DecimalField(max_digits=12, decimal_places=2, help_text="Amount in INR")
+
+    # ── Original currency amounts ────────────────────────────────────────
+    original_rate   = models.DecimalField(
+        max_digits=10, decimal_places=2, default=0,
+        help_text="Rate in original currency"
+    )
+    original_amount = models.DecimalField(
+        max_digits=12, decimal_places=2, default=0,
+        help_text="Amount in original currency"
+    )
+
     is_received    = models.BooleanField(default=False)
 
     class Meta:
@@ -183,6 +234,15 @@ class PurchaseOrderItem(models.Model):
 
     def save(self, *args, **kwargs):
         self.amount = self.quantity * self.rate
+
+        currency = self.po.currency
+        if currency == 'USD' and self.po.exchange_rate:
+            self.original_rate = self.original_rate or (self.rate / self.po.exchange_rate)
+            self.original_amount = self.quantity * self.original_rate
+        else:
+            self.original_rate = self.rate
+            self.original_amount = self.amount
+
         super().save(*args, **kwargs)
 
     def mark_as_purchased(self):

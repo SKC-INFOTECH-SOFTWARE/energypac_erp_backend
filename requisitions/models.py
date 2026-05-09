@@ -2,7 +2,9 @@ from django.db import models
 from django.conf import settings
 from inventory.models import Product
 from vendors.models import Vendor
+from core.models import CURRENCY_CHOICES, ExchangeRate
 import uuid
+from decimal import Decimal
 from datetime import datetime
 
 class Requisition(models.Model):
@@ -138,12 +140,30 @@ class VendorQuotation(models.Model):
     payment_terms = models.CharField(max_length=200, blank=True)
     delivery_terms = models.CharField(max_length=200, blank=True)
     remarks = models.TextField(blank=True)
+    # ── Currency ──────────────────────────────────────────────────────────
+    currency = models.CharField(
+        max_length=3, choices=CURRENCY_CHOICES, default='INR',
+        help_text="Currency in which vendor quoted"
+    )
+    exchange_rate = models.DecimalField(
+        max_digits=10, decimal_places=4, default=1,
+        help_text="USD to INR rate at time of quotation (1 if INR)"
+    )
+
+    # ── Amounts (always INR internally) ──────────────────────────────────
     total_amount = models.DecimalField(
         max_digits=12,
         decimal_places=2,
         default=0,
-        help_text="Total quotation amount (without tax)"
+        help_text="Total quotation amount in INR (without tax)"
     )
+
+    # ── Original currency amounts ────────────────────────────────────────
+    original_total_amount = models.DecimalField(
+        max_digits=12, decimal_places=2, default=0,
+        help_text="Total in original currency (same as total_amount if INR)"
+    )
+
     is_selected = models.BooleanField(
         default=False,
         help_text="Whether this quotation is selected for PO"
@@ -206,15 +226,26 @@ class VendorQuotationItem(models.Model):
     quoted_rate = models.DecimalField(
         max_digits=10,
         decimal_places=2,
-        help_text="Rate quoted by vendor per unit (without tax)"
+        help_text="Rate quoted by vendor per unit in INR (without tax)"
     )
     amount = models.DecimalField(
         max_digits=12,
         decimal_places=2,
         null=True,
         blank=True,
-        help_text="quantity × quoted_rate (without tax)"
+        help_text="quantity × quoted_rate in INR (without tax)"
     )
+
+    # ── Original currency amounts ────────────────────────────────────────
+    original_quoted_rate = models.DecimalField(
+        max_digits=10, decimal_places=2, default=0,
+        help_text="Rate in original currency (same as quoted_rate if INR)"
+    )
+    original_amount = models.DecimalField(
+        max_digits=12, decimal_places=2, default=0,
+        help_text="Amount in original currency (same as amount if INR)"
+    )
+
     remarks = models.TextField(blank=True)
 
     class Meta:
@@ -223,8 +254,19 @@ class VendorQuotationItem(models.Model):
         verbose_name_plural = 'Quotation Items'
 
     def save(self, *args, **kwargs):
-        # Auto-calculate amount (no tax)
-        self.amount = self.quantity * self.quoted_rate
+        currency = self.quotation.currency
+        rate = self.quotation.exchange_rate
+
+        if currency == 'USD':
+            self.original_quoted_rate = self.original_quoted_rate or self.quoted_rate
+            self.original_amount = self.quantity * self.original_quoted_rate
+            self.quoted_rate = self.original_quoted_rate * rate
+            self.amount = self.quantity * self.quoted_rate
+        else:
+            self.amount = self.quantity * self.quoted_rate
+            self.original_quoted_rate = self.quoted_rate
+            self.original_amount = self.amount
+
         super().save(*args, **kwargs)
 
     def __str__(self):

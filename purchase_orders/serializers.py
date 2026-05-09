@@ -22,9 +22,11 @@ class PurchaseOrderItemSerializer(serializers.ModelSerializer):
         model  = PurchaseOrderItem
         fields = [
             'id', 'product', 'product_name', 'product_code', 'hsn_code',
-            'unit', 'quantity', 'rate', 'amount', 'is_received',
+            'unit', 'quantity', 'rate', 'amount',
+            'original_rate', 'original_amount',
+            'is_received',
         ]
-        read_only_fields = ['id', 'amount']
+        read_only_fields = ['id', 'amount', 'original_rate', 'original_amount']
 
 
 class PurchaseOrderSerializer(serializers.ModelSerializer):
@@ -41,7 +43,9 @@ class PurchaseOrderSerializer(serializers.ModelSerializer):
             'id', 'po_number', 'requisition', 'requisition_number',
             'vendor', 'vendor_name', 'vendor_details',
             'po_date', 'remarks',
+            'currency', 'exchange_rate',
             'items_total', 'freight_cost', 'total_amount',
+            'original_items_total', 'original_freight_cost', 'original_total_amount',
             'amount_paid', 'balance',
             'status',
             'cancellation_reason', 'cancelled_by', 'cancelled_by_name', 'cancelled_at',
@@ -50,6 +54,8 @@ class PurchaseOrderSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = [
             'id', 'po_number', 'items_total', 'total_amount',
+            'currency', 'exchange_rate',
+            'original_items_total', 'original_freight_cost', 'original_total_amount',
             'amount_paid', 'balance',
             'cancellation_reason', 'cancelled_by', 'cancelled_at',
             'created_at', 'updated_at',
@@ -145,13 +151,21 @@ class GeneratePOSerializer(serializers.Serializer):
             # Use per-vendor freight cost if available, otherwise fall back to flat value
             vendor_freight = vendor_freight_map.get(str(vendor_id), flat_freight_cost)
 
+            # Inherit currency from vendor quotation
+            first_item = items[0]
+            quotation = first_item.quotation
+            currency = quotation.currency
+            exchange_rate = quotation.exchange_rate
+
             po = PurchaseOrder.objects.create(
-                requisition  = requisition,
-                vendor       = vendor,
-                po_date      = validated_data['po_date'],
-                freight_cost = vendor_freight,
-                remarks      = validated_data.get('remarks', ''),
-                created_by   = validated_data['created_by']
+                requisition   = requisition,
+                vendor        = vendor,
+                po_date       = validated_data['po_date'],
+                currency      = currency,
+                exchange_rate = exchange_rate,
+                freight_cost  = vendor_freight,
+                remarks       = validated_data.get('remarks', ''),
+                created_by    = validated_data['created_by']
             )
 
             for q_item in items:
@@ -160,7 +174,8 @@ class GeneratePOSerializer(serializers.Serializer):
                     quotation_item = q_item,
                     product        = q_item.product,
                     quantity       = q_item.quantity,
-                    rate           = q_item.quoted_rate
+                    rate           = q_item.quoted_rate,
+                    original_rate  = q_item.original_quoted_rate,
                 )
 
             # calculate_total() computes items_total + freight_cost = total_amount

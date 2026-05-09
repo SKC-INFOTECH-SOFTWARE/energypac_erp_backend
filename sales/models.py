@@ -1,7 +1,9 @@
 from django.db import models
 from django.conf import settings
 from inventory.models import Product
+from core.models import CURRENCY_CHOICES, ExchangeRate
 import uuid
+from decimal import Decimal
 from datetime import datetime
 
 
@@ -21,6 +23,12 @@ class ClientQuery(models.Model):
     address = models.TextField(blank=True)
 
     query_date = models.DateField(help_text="Date of query received")
+
+    currency = models.CharField(
+        max_length=3, choices=CURRENCY_CHOICES, default='INR',
+        help_text="Currency in which the client wants to deal (INR or USD)"
+    )
+
     pdf_file = models.CharField(
         max_length=500,
         blank=True,
@@ -95,6 +103,16 @@ class SalesQuotation(models.Model):
     delivery_terms = models.CharField(max_length=200, blank=True)
     remarks = models.TextField(blank=True)
 
+    # ── Currency ──────────────────────────────────────────────────────────
+    currency = models.CharField(
+        max_length=3, choices=CURRENCY_CHOICES, default='INR',
+        help_text="Currency for this quotation"
+    )
+    exchange_rate = models.DecimalField(
+        max_digits=10, decimal_places=4, default=1,
+        help_text="USD to INR rate at time of quotation (1 if INR)"
+    )
+
     # Tax configuration
     cgst_percentage = models.DecimalField(
         max_digits=5,
@@ -129,7 +147,20 @@ class SalesQuotation(models.Model):
         max_digits=12,
         decimal_places=2,
         default=0,
-        help_text="Subtotal + all taxes"
+        help_text="Subtotal + all taxes (INR)"
+    )
+
+    # ── Original currency amounts ────────────────────────────────────────
+    original_subtotal = models.DecimalField(
+        max_digits=12, decimal_places=2, default=0,
+        help_text="Subtotal in original currency"
+    )
+    original_cgst_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    original_sgst_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    original_igst_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    original_total_amount = models.DecimalField(
+        max_digits=12, decimal_places=2, default=0,
+        help_text="Total in original currency"
     )
 
     status = models.CharField(
@@ -169,10 +200,9 @@ class SalesQuotation(models.Model):
         super().save(*args, **kwargs)
 
     def calculate_totals(self):
-        """Calculate all amounts based on items"""
+        """Calculate all amounts based on items. INR fields are always authoritative."""
         self.subtotal = sum(item.amount for item in self.items.all())
 
-        # Calculate taxes
         self.cgst_amount = (self.subtotal * self.cgst_percentage) / 100
         self.sgst_amount = (self.subtotal * self.sgst_percentage) / 100
         self.igst_amount = (self.subtotal * self.igst_percentage) / 100
@@ -183,6 +213,25 @@ class SalesQuotation(models.Model):
             self.sgst_amount +
             self.igst_amount
         )
+
+        if self.currency == 'USD' and self.exchange_rate:
+            rate = self.exchange_rate
+            self.original_subtotal = sum(item.original_amount for item in self.items.all())
+            self.original_cgst_amount = (self.original_subtotal * self.cgst_percentage) / 100
+            self.original_sgst_amount = (self.original_subtotal * self.sgst_percentage) / 100
+            self.original_igst_amount = (self.original_subtotal * self.igst_percentage) / 100
+            self.original_total_amount = (
+                self.original_subtotal +
+                self.original_cgst_amount +
+                self.original_sgst_amount +
+                self.original_igst_amount
+            )
+        else:
+            self.original_subtotal = self.subtotal
+            self.original_cgst_amount = self.cgst_amount
+            self.original_sgst_amount = self.sgst_amount
+            self.original_igst_amount = self.igst_amount
+            self.original_total_amount = self.total_amount
 
         self.save()
 
@@ -226,12 +275,22 @@ class SalesQuotationItem(models.Model):
     rate = models.DecimalField(
         max_digits=10,
         decimal_places=2,
-        help_text="Rate per unit"
+        help_text="Rate per unit (INR)"
     )
     amount = models.DecimalField(
         max_digits=12,
         decimal_places=2,
-        help_text="quantity × rate"
+        help_text="quantity × rate (INR)"
+    )
+
+    # ── Original currency amounts ────────────────────────────────────────
+    original_rate = models.DecimalField(
+        max_digits=10, decimal_places=2, default=0,
+        help_text="Rate in original currency (same as rate if INR)"
+    )
+    original_amount = models.DecimalField(
+        max_digits=12, decimal_places=2, default=0,
+        help_text="Amount in original currency (same as amount if INR)"
     )
 
     remarks = models.TextField(blank=True)
@@ -242,7 +301,6 @@ class SalesQuotationItem(models.Model):
         verbose_name_plural = 'Quotation Items'
 
     def save(self, *args, **kwargs):
-        # Auto-fill from product if linked
         if self.product:
             self.item_code = self.product.item_code
             self.item_name = self.product.item_name
@@ -251,11 +309,18 @@ class SalesQuotationItem(models.Model):
             if not self.description:
                 self.description = self.product.description
 
-            # If manual entry with product link, add to product master
-            # (This happens when user selects manual but wants to save to inventory)
+        currency = self.quotation.currency
+        ex_rate = self.quotation.exchange_rate
 
-        # Calculate amount
-        self.amount = self.quantity * self.rate
+        if currency == 'USD':
+            self.original_rate = self.original_rate or self.rate
+            self.original_amount = self.quantity * self.original_rate
+            self.rate = self.original_rate * ex_rate
+            self.amount = self.quantity * self.rate
+        else:
+            self.amount = self.quantity * self.rate
+            self.original_rate = self.rate
+            self.original_amount = self.amount
 
         super().save(*args, **kwargs)
 

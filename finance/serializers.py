@@ -87,8 +87,6 @@ class POFinanceSummarySerializer(serializers.ModelSerializer):
     purchased_items_count = serializers.SerializerMethodField()
     total_items_count     = serializers.SerializerMethodField()
 
-    # FIX (Issue 3): always compute balance from total_amount - amount_paid
-    # so old POs (where stored balance=0) show the correct outstanding amount
     balance = serializers.SerializerMethodField()
 
     class Meta:
@@ -97,7 +95,9 @@ class POFinanceSummarySerializer(serializers.ModelSerializer):
             'id', 'po_number', 'requisition', 'requisition_number',
             'vendor', 'vendor_name', 'vendor_phone', 'vendor_email', 'vendor_gst',
             'po_date', 'remarks',
+            'currency', 'exchange_rate',
             'items_total', 'freight_cost', 'total_amount',
+            'original_items_total', 'original_freight_cost', 'original_total_amount',
             'amount_paid', 'balance',
             'purchased_items_total', 'purchased_items_count', 'total_items_count',
             'status', 'payment_count',
@@ -159,10 +159,14 @@ class BillFinanceSummarySerializer(serializers.ModelSerializer):
             'id', 'bill_number', 'bill_type',
             'work_order', 'wo_number', 'bill_date',
             'client_name', 'contact_person', 'phone', 'email', 'address',
+            'currency', 'exchange_rate',
             'subtotal',
             'cgst_percentage', 'sgst_percentage', 'igst_percentage',
             'cgst_amount', 'sgst_amount', 'igst_amount', 'total_gst',
             'total_amount', 'freight_cost',
+            'original_subtotal', 'original_cgst_amount', 'original_sgst_amount',
+            'original_igst_amount', 'original_total_amount',
+            'original_freight_cost', 'original_net_payable',
             'advance_deducted', 'net_payable',
             'amount_paid', 'balance',
             'payment_count', 'status',

@@ -1,10 +1,11 @@
-from django.db import models
+from django.db import models, transaction
 from django.conf import settings
 from work_orders.models import WorkOrder, WorkOrderItem
 from inventory.models import Product
+from core.models import CURRENCY_CHOICES
 import uuid
+from decimal import Decimal
 from datetime import datetime
-from django.db import transaction
 
 
 class Bill(models.Model):
@@ -103,6 +104,16 @@ class Bill(models.Model):
         help_text="Vessel name / flight number"
     )
 
+    # ── Currency (inherited from Work Order) ─────────────────────────────────
+    currency = models.CharField(
+        max_length=3, choices=CURRENCY_CHOICES, default='INR',
+        help_text="Currency inherited from work order"
+    )
+    exchange_rate = models.DecimalField(
+        max_digits=10, decimal_places=4, default=1,
+        help_text="USD to INR rate (1 if INR)"
+    )
+
     # ── Financial amounts (always stored in INR) ──────────────────────────────
     subtotal = models.DecimalField(
         max_digits=12, decimal_places=2, default=0,
@@ -150,6 +161,27 @@ class Bill(models.Model):
         help_text="Remaining balance (net_payable - amount_paid, INR)"
     )
 
+    # ── Original currency amounts ────────────────────────────────────────────
+    original_subtotal = models.DecimalField(
+        max_digits=12, decimal_places=2, default=0,
+        help_text="Subtotal in original currency"
+    )
+    original_cgst_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    original_sgst_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    original_igst_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    original_total_amount = models.DecimalField(
+        max_digits=12, decimal_places=2, default=0,
+        help_text="Total in original currency"
+    )
+    original_freight_cost = models.DecimalField(
+        max_digits=12, decimal_places=2, default=0,
+        help_text="Freight cost in original currency"
+    )
+    original_net_payable = models.DecimalField(
+        max_digits=12, decimal_places=2, default=0,
+        help_text="Net payable in original currency"
+    )
+
     remarks = models.TextField(blank=True)
 
     status = models.CharField(
@@ -186,17 +218,8 @@ class Bill(models.Model):
 
     def calculate_totals(self):
         """
-        Recalculate all amounts.
-
-        Formula
-        -------
-        subtotal      = sum(item.amount)
-        cgst_amount   = subtotal × cgst_percentage / 100
-        sgst_amount   = subtotal × sgst_percentage / 100
-        igst_amount   = subtotal × igst_percentage / 100
-        total_amount  = subtotal + cgst + sgst + igst
-        net_payable   = total_amount + freight_cost - advance_deducted
-        balance       = net_payable - amount_paid
+        Recalculate all amounts (INR is authoritative).
+        Original currency amounts are derived for display.
         """
         self.subtotal = sum(item.amount for item in self.items.all())
 
@@ -220,6 +243,36 @@ class Bill(models.Model):
         self.advance_deducted = min(self.total_amount + self.freight_cost, available_advance)
         self.net_payable     = self.total_amount + self.freight_cost - self.advance_deducted
         self.balance         = self.net_payable - self.amount_paid
+
+        if self.currency == 'USD' and self.exchange_rate:
+            self.original_subtotal = sum(
+                item.original_amount for item in self.items.all()
+            )
+            self.original_cgst_amount = (self.original_subtotal * self.cgst_percentage) / 100
+            self.original_sgst_amount = (self.original_subtotal * self.sgst_percentage) / 100
+            self.original_igst_amount = (self.original_subtotal * self.igst_percentage) / 100
+            self.original_total_amount = (
+                self.original_subtotal +
+                self.original_cgst_amount +
+                self.original_sgst_amount +
+                self.original_igst_amount
+            )
+            self.original_freight_cost = self.original_freight_cost or (
+                self.freight_cost / self.exchange_rate if self.exchange_rate else self.freight_cost
+            )
+            self.original_net_payable = (
+                self.original_total_amount +
+                self.original_freight_cost -
+                (self.advance_deducted / self.exchange_rate if self.exchange_rate else self.advance_deducted)
+            )
+        else:
+            self.original_subtotal = self.subtotal
+            self.original_cgst_amount = self.cgst_amount
+            self.original_sgst_amount = self.sgst_amount
+            self.original_igst_amount = self.igst_amount
+            self.original_total_amount = self.total_amount
+            self.original_freight_cost = self.freight_cost
+            self.original_net_payable = self.net_payable
 
         self.save()
 
@@ -299,6 +352,16 @@ class BillItem(models.Model):
     rate   = models.DecimalField(max_digits=10, decimal_places=2, help_text="Rate per unit (INR)")
     amount = models.DecimalField(max_digits=12, decimal_places=2, help_text="delivered_quantity × rate (INR)")
 
+    # ── Original currency amounts ────────────────────────────────────────
+    original_rate = models.DecimalField(
+        max_digits=10, decimal_places=2, default=0,
+        help_text="Rate in original currency"
+    )
+    original_amount = models.DecimalField(
+        max_digits=12, decimal_places=2, default=0,
+        help_text="Amount in original currency"
+    )
+
     remarks = models.TextField(blank=True)
 
     class Meta:
@@ -321,6 +384,9 @@ class BillItem(models.Model):
         self.amount           = self.delivered_quantity * self.rate
         total_delivered       = self.previously_delivered_quantity + self.delivered_quantity
         self.pending_quantity = self.ordered_quantity - total_delivered
+
+        self.original_rate = wo_item.original_rate
+        self.original_amount = self.delivered_quantity * self.original_rate
 
         super().save(*args, **kwargs)
 

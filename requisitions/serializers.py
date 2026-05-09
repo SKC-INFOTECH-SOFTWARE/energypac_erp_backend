@@ -2,6 +2,7 @@ from rest_framework import serializers
 from .models import (Requisition, RequisitionItem,
                      VendorRequisitionAssignment, VendorRequisitionItem,
                      VendorQuotation, VendorQuotationItem)
+from core.models import ExchangeRate
 from inventory.serializers import ProductSerializer
 from vendors.serializers import VendorSerializer
 from vendors.models import Vendor
@@ -224,9 +225,11 @@ class VendorQuotationItemSerializer(serializers.ModelSerializer):
         model = VendorQuotationItem
         fields = [
             'id', 'vendor_item', 'product', 'product_name', 'product_code',
-            'unit', 'quantity', 'quoted_rate', 'amount', 'remarks'
+            'unit', 'quantity', 'quoted_rate', 'amount',
+            'original_quoted_rate', 'original_amount',
+            'remarks'
         ]
-        read_only_fields = ['id', 'amount']
+        read_only_fields = ['id', 'amount', 'original_amount']
 
 class VendorQuotationSerializer(serializers.ModelSerializer):
     """Serializer for viewing quotations"""
@@ -243,11 +246,14 @@ class VendorQuotationSerializer(serializers.ModelSerializer):
             'id', 'quotation_number', 'assignment', 'vendor_name', 'vendor_code',
             'requisition_number', 'quotation_date', 'reference_number',
             'validity_date', 'payment_terms', 'delivery_terms', 'remarks',
-            'total_amount', 'is_selected', 'created_by', 'created_by_name',
+            'currency', 'exchange_rate',
+            'total_amount', 'original_total_amount',
+            'is_selected', 'created_by', 'created_by_name',
             'total_items', 'items', 'created_at', 'updated_at'
         ]
         read_only_fields = [
             'id', 'quotation_number', 'quotation_date', 'created_by',
+            'exchange_rate', 'total_amount', 'original_total_amount',
             'created_at', 'updated_at'
         ]
 
@@ -273,6 +279,10 @@ class VendorQuotationCreateSerializer(serializers.Serializer):
     payment_terms = serializers.CharField(required=False, allow_blank=True)
     delivery_terms = serializers.CharField(required=False, allow_blank=True)
     remarks = serializers.CharField(required=False, allow_blank=True)
+    currency = serializers.ChoiceField(
+        choices=['INR', 'USD'], default='INR',
+        help_text="Currency of the quotation (INR or USD)"
+    )
     items = serializers.ListField(
         child=serializers.DictField(),
         help_text="List of items with vendor_item and quoted_rate"
@@ -312,8 +322,16 @@ class VendorQuotationCreateSerializer(serializers.Serializer):
     def create(self, validated_data):
         items_data = validated_data.pop('items')
         assignment = validated_data.pop('assignment')
+        currency = validated_data.pop('currency', 'INR')
+
+        exchange_rate = 1
+        if currency == 'USD':
+            exchange_rate = ExchangeRate.get_current_rate()
+
         quotation = VendorQuotation.objects.create(
             assignment=assignment,
+            currency=currency,
+            exchange_rate=exchange_rate,
             reference_number=validated_data.get('reference_number', ''),
             validity_date=validated_data.get('validity_date'),
             payment_terms=validated_data.get('payment_terms', ''),
@@ -321,19 +339,38 @@ class VendorQuotationCreateSerializer(serializers.Serializer):
             remarks=validated_data.get('remarks', ''),
             created_by=validated_data['created_by']
         )
+
         total_amount = 0
+        original_total = 0
         for item_data in items_data:
             vendor_item = VendorRequisitionItem.objects.get(id=item_data['vendor_item'])
-            quotation_item = VendorQuotationItem.objects.create(
-                quotation=quotation,
-                vendor_item=vendor_item,
-                product=vendor_item.product,
-                quantity=vendor_item.quantity,
-                quoted_rate=item_data['quoted_rate'],
-                remarks=item_data.get('remarks', '')
-            )
+            quoted_rate = item_data['quoted_rate']
+
+            if currency == 'USD':
+                quotation_item = VendorQuotationItem.objects.create(
+                    quotation=quotation,
+                    vendor_item=vendor_item,
+                    product=vendor_item.product,
+                    quantity=vendor_item.quantity,
+                    original_quoted_rate=quoted_rate,
+                    quoted_rate=quoted_rate,
+                    remarks=item_data.get('remarks', '')
+                )
+            else:
+                quotation_item = VendorQuotationItem.objects.create(
+                    quotation=quotation,
+                    vendor_item=vendor_item,
+                    product=vendor_item.product,
+                    quantity=vendor_item.quantity,
+                    quoted_rate=quoted_rate,
+                    remarks=item_data.get('remarks', '')
+                )
+
             total_amount += quotation_item.amount
+            original_total += quotation_item.original_amount
+
         quotation.total_amount = total_amount
+        quotation.original_total_amount = original_total
         quotation.save()
         return quotation
 
@@ -389,7 +426,10 @@ class RequisitionFlowSerializer(serializers.Serializer):
                 quotation_data = {
                     'quotation_number': quotation.quotation_number,
                     'quotation_date': quotation.quotation_date,
+                    'currency': quotation.currency,
+                    'exchange_rate': quotation.exchange_rate,
                     'total_amount': quotation.total_amount,
+                    'original_total_amount': quotation.original_total_amount,
                     'is_selected': quotation.is_selected,
                     'items': []
                 }
@@ -400,7 +440,9 @@ class RequisitionFlowSerializer(serializers.Serializer):
                         'product_name': q_item.product.item_name,
                         'quantity': q_item.quantity,
                         'quoted_rate': q_item.quoted_rate,
-                        'amount': q_item.amount
+                        'amount': q_item.amount,
+                        'original_quoted_rate': q_item.original_quoted_rate,
+                        'original_amount': q_item.original_amount,
                     })
 
                 vendor_data['quotations'].append(quotation_data)

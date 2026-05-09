@@ -1,6 +1,7 @@
 from django.conf import settings
 from rest_framework import serializers
 from .models import ClientQuery, SalesQuotation, SalesQuotationItem
+from core.models import ExchangeRate
 from inventory.models import Product
 from django.core.files.storage import default_storage
 import os
@@ -14,7 +15,8 @@ class ClientQuerySerializer(serializers.ModelSerializer):
         model = ClientQuery
         fields = [
             'id', 'query_number', 'client_name', 'contact_person', 'phone',
-            'email', 'address', 'query_date', 'pdf_file', 'remarks', 'status',
+            'email', 'address', 'query_date', 'currency',
+            'pdf_file', 'remarks', 'status',
             'created_by', 'created_by_name', 'quotation_count',
             'created_at', 'updated_at'
         ]
@@ -32,7 +34,7 @@ class ClientQueryCreateSerializer(serializers.ModelSerializer):
         model = ClientQuery
         fields = [
             'client_name', 'contact_person', 'phone', 'email', 'address',
-            'query_date', 'remarks', 'pdf_upload'
+            'query_date', 'currency', 'remarks', 'pdf_upload'
         ]
 
     def create(self, validated_data):
@@ -74,9 +76,10 @@ class SalesQuotationItemSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'product', 'product_details', 'item_code', 'item_name',
             'description', 'hsn_code', 'unit', 'quantity', 'rate', 'amount',
+            'original_rate', 'original_amount',
             'remarks'
         ]
-        read_only_fields = ['id', 'amount']
+        read_only_fields = ['id', 'amount', 'original_amount']
 
     def get_product_details(self, obj):
         if obj.product:
@@ -167,15 +170,23 @@ class SalesQuotationSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'quotation_number', 'client_query', 'client_name', 'query_number',
             'quotation_date', 'validity_date', 'payment_terms', 'delivery_terms',
-            'remarks', 'cgst_percentage', 'sgst_percentage', 'igst_percentage',
+            'remarks',
+            'currency', 'exchange_rate',
+            'cgst_percentage', 'sgst_percentage', 'igst_percentage',
             'subtotal', 'cgst_amount', 'sgst_amount', 'igst_amount',
-            'total_gst', 'gst_breakdown', 'total_amount', 'status',
+            'total_gst', 'gst_breakdown', 'total_amount',
+            'original_subtotal', 'original_cgst_amount', 'original_sgst_amount',
+            'original_igst_amount', 'original_total_amount',
+            'status',
             'created_by', 'created_by_name', 'total_items', 'items',
             'created_at', 'updated_at'
         ]
         read_only_fields = [
             'id', 'quotation_number', 'subtotal', 'cgst_amount',
             'sgst_amount', 'igst_amount', 'total_amount',
+            'exchange_rate',
+            'original_subtotal', 'original_cgst_amount', 'original_sgst_amount',
+            'original_igst_amount', 'original_total_amount',
             'created_at', 'updated_at'
         ]
 
@@ -255,15 +266,23 @@ class SalesQuotationUpdateSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'quotation_number', 'client_query', 'client_name', 'query_number',
             'quotation_date', 'validity_date', 'payment_terms', 'delivery_terms',
-            'remarks', 'cgst_percentage', 'sgst_percentage', 'igst_percentage',
+            'remarks',
+            'currency', 'exchange_rate',
+            'cgst_percentage', 'sgst_percentage', 'igst_percentage',
             'subtotal', 'cgst_amount', 'sgst_amount', 'igst_amount',
-            'total_gst', 'gst_breakdown', 'total_amount', 'status',
+            'total_gst', 'gst_breakdown', 'total_amount',
+            'original_subtotal', 'original_cgst_amount', 'original_sgst_amount',
+            'original_igst_amount', 'original_total_amount',
+            'status',
             'created_by', 'created_by_name', 'total_items', 'items',
             'created_at', 'updated_at'
         ]
         read_only_fields = [
             'id', 'quotation_number', 'subtotal',
             'cgst_amount', 'sgst_amount', 'igst_amount', 'total_amount',
+            'exchange_rate',
+            'original_subtotal', 'original_cgst_amount', 'original_sgst_amount',
+            'original_igst_amount', 'original_total_amount',
             'created_at', 'updated_at',
         ]
 
@@ -288,8 +307,13 @@ class SalesQuotationUpdateSerializer(serializers.ModelSerializer):
     def update(self, instance, validated_data):
         items_data = validated_data.pop('items', None)
 
-        # 1. Update all header fields (quotation_date, validity_date,
-        #    payment_terms, delivery_terms, remarks, gst percentages, status, …)
+        new_currency = validated_data.get('currency')
+        if new_currency and new_currency != instance.currency:
+            if new_currency == 'USD':
+                validated_data['exchange_rate'] = ExchangeRate.get_current_rate()
+            else:
+                validated_data['exchange_rate'] = 1
+
         for attr, value in validated_data.items():
             setattr(instance, attr, value)
         instance.save()
@@ -345,6 +369,10 @@ class SalesQuotationCreateSerializer(serializers.Serializer):
     payment_terms   = serializers.CharField(required=False, allow_blank=True)
     delivery_terms  = serializers.CharField(required=False, allow_blank=True)
     remarks         = serializers.CharField(required=False, allow_blank=True)
+    currency        = serializers.ChoiceField(
+        choices=['INR', 'USD'], required=False,
+        help_text="Currency for this quotation. If not provided, inherits from client query."
+    )
     cgst_percentage = serializers.DecimalField(max_digits=5, decimal_places=2, default=0)
     sgst_percentage = serializers.DecimalField(max_digits=5, decimal_places=2, default=0)
     igst_percentage = serializers.DecimalField(max_digits=5, decimal_places=2, default=0)
@@ -385,24 +413,33 @@ class SalesQuotationCreateSerializer(serializers.Serializer):
         items_data   = validated_data.pop('items')
         client_query = ClientQuery.objects.get(id=validated_data.pop('client_query'))
         created_by   = validated_data.pop('created_by')
+        currency     = validated_data.pop('currency', None) or client_query.currency
+
+        exchange_rate = 1
+        if currency == 'USD':
+            exchange_rate = ExchangeRate.get_current_rate()
 
         quotation = SalesQuotation.objects.create(
-            client_query   = client_query,
-            quotation_date = validated_data['quotation_date'],
-            validity_date  = validated_data.get('validity_date'),
-            payment_terms  = validated_data.get('payment_terms', ''),
-            delivery_terms = validated_data.get('delivery_terms', ''),
-            remarks        = validated_data.get('remarks', ''),
+            client_query    = client_query,
+            quotation_date  = validated_data['quotation_date'],
+            validity_date   = validated_data.get('validity_date'),
+            payment_terms   = validated_data.get('payment_terms', ''),
+            delivery_terms  = validated_data.get('delivery_terms', ''),
+            remarks         = validated_data.get('remarks', ''),
+            currency        = currency,
+            exchange_rate   = exchange_rate,
             cgst_percentage = validated_data.get('cgst_percentage', 0),
             sgst_percentage = validated_data.get('sgst_percentage', 0),
             igst_percentage = validated_data.get('igst_percentage', 0),
-            created_by     = created_by
+            created_by      = created_by
         )
 
         for item_data in items_data:
             product_id = item_data.get('product')
             product = Product.objects.get(id=product_id) if product_id else None
-            SalesQuotationItem.objects.create(
+            item_rate = item_data.get('rate', 0)
+
+            create_kwargs = dict(
                 quotation    = quotation,
                 product      = product,
                 item_code    = item_data.get('item_code', ''),
@@ -411,9 +448,14 @@ class SalesQuotationCreateSerializer(serializers.Serializer):
                 hsn_code     = item_data.get('hsn_code', ''),
                 unit         = item_data.get('unit', 'PCS'),
                 quantity     = item_data['quantity'],
-                rate         = item_data.get('rate', 0),
+                rate         = item_rate,
                 remarks      = item_data.get('remarks', '')
             )
+
+            if currency == 'USD':
+                create_kwargs['original_rate'] = item_rate
+
+            SalesQuotationItem.objects.create(**create_kwargs)
 
         quotation.calculate_totals()
         client_query.status = 'QUOTATION_SENT'

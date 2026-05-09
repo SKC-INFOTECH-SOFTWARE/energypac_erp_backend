@@ -6,9 +6,9 @@ from .models import ClientQuery, SalesQuotation, SalesQuotationItem
 class ClientQueryAdmin(admin.ModelAdmin):
     list_display = [
         'query_number', 'client_name', 'contact_person', 'phone',
-        'query_date', 'status', 'created_by', 'created_at'
+        'query_date', 'currency', 'status', 'created_by', 'created_at'
     ]
-    list_filter = ['status', 'query_date', 'created_at']
+    list_filter = ['status', 'currency', 'query_date', 'created_at']
     search_fields = [
         'query_number', 'client_name', 'contact_person',
         'email', 'remarks'
@@ -20,7 +20,7 @@ class ClientQueryAdmin(admin.ModelAdmin):
 
     fieldsets = (
         ('Query Information', {
-            'fields': ('query_number', 'query_date', 'status')
+            'fields': ('query_number', 'query_date', 'currency', 'status')
         }),
         ('Client Details', {
             'fields': ('client_name', 'contact_person', 'phone', 'email', 'address')
@@ -41,10 +41,10 @@ class ClientQueryAdmin(admin.ModelAdmin):
 class SalesQuotationItemInline(admin.TabularInline):
     model = SalesQuotationItem
     extra = 0
-    readonly_fields = ['amount']
+    readonly_fields = ['amount', 'original_amount']
     fields = [
         'product', 'item_code', 'item_name', 'quantity',
-        'unit', 'rate', 'amount', 'remarks'
+        'unit', 'rate', 'amount', 'original_rate', 'original_amount', 'remarks'
     ]
     raw_id_fields = ['product']
 
@@ -53,7 +53,7 @@ class SalesQuotationItemInline(admin.TabularInline):
 class SalesQuotationAdmin(admin.ModelAdmin):
     list_display = [
         'quotation_number', 'client_query', 'quotation_date',
-        'subtotal', 'total_amount', 'status', 'created_by', 'created_at'
+        'currency', 'subtotal', 'total_amount', 'status', 'created_by', 'created_at'
     ]
     list_filter = ['status', 'quotation_date', 'created_at']
     search_fields = [
@@ -61,8 +61,10 @@ class SalesQuotationAdmin(admin.ModelAdmin):
         'client_query__query_number'
     ]
     readonly_fields = [
-        'quotation_number', 'subtotal', 'cgst_amount',
-        'sgst_amount', 'igst_amount', 'total_amount',
+        'quotation_number', 'exchange_rate',
+        'subtotal', 'cgst_amount', 'sgst_amount', 'igst_amount', 'total_amount',
+        'original_subtotal', 'original_cgst_amount', 'original_sgst_amount',
+        'original_igst_amount', 'original_total_amount',
         'created_at', 'updated_at'
     ]
     raw_id_fields = ['client_query']
@@ -81,13 +83,23 @@ class SalesQuotationAdmin(admin.ModelAdmin):
         ('Terms & Conditions', {
             'fields': ('payment_terms', 'delivery_terms', 'remarks')
         }),
+        ('Currency', {
+            'fields': ('currency', 'exchange_rate')
+        }),
         ('GST Configuration', {
             'fields': ('cgst_percentage', 'sgst_percentage', 'igst_percentage')
         }),
-        ('Amounts', {
+        ('Amounts (INR)', {
             'fields': (
                 'subtotal', 'cgst_amount', 'sgst_amount',
                 'igst_amount', 'total_amount'
+            ),
+            'classes': ('collapse',)
+        }),
+        ('Original Currency Amounts', {
+            'fields': (
+                'original_subtotal', 'original_cgst_amount', 'original_sgst_amount',
+                'original_igst_amount', 'original_total_amount'
             ),
             'classes': ('collapse',)
         }),

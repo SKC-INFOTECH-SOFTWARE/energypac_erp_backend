@@ -15,17 +15,20 @@ class WorkOrderItemInline(admin.TabularInline):
 @admin.register(WorkOrder)
 class WorkOrderAdmin(admin.ModelAdmin):
     list_display = [
-        'wo_number', 'client_name', 'wo_date', 'total_amount',
+        'wo_number', 'client_name', 'wo_date', 'currency', 'total_amount',
         'advance_remaining', 'status', 'created_at'
     ]
-    list_filter = ['status', 'wo_date', 'created_at']
+    list_filter = ['status', 'currency', 'wo_date', 'created_at']
     search_fields = [
         'wo_number', 'client_name', 'sales_quotation__quotation_number'
     ]
     readonly_fields = [
-        'wo_number', 'sales_quotation', 'subtotal', 'cgst_amount',
-        'sgst_amount', 'igst_amount', 'total_amount', 'advance_deducted',
-        'advance_remaining', 'total_delivered_value', 'created_at', 'updated_at'
+        'wo_number', 'sales_quotation', 'currency', 'exchange_rate',
+        'subtotal', 'cgst_amount', 'sgst_amount', 'igst_amount', 'total_amount',
+        'original_subtotal', 'original_cgst_amount', 'original_sgst_amount',
+        'original_igst_amount', 'original_total_amount',
+        'advance_deducted', 'advance_remaining', 'total_delivered_value',
+        'created_at', 'updated_at'
     ]
     inlines = [WorkOrderItemInline]
     ordering = ['-wo_number']
@@ -43,11 +46,21 @@ class WorkOrderAdmin(admin.ModelAdmin):
                 'client_name', 'contact_person', 'phone', 'email', 'address'
             )
         }),
-        ('Financial Details', {
+        ('Currency', {
+            'fields': ('currency', 'exchange_rate')
+        }),
+        ('Financial Details (INR)', {
             'fields': (
                 'subtotal', 'cgst_percentage', 'sgst_percentage', 'igst_percentage',
                 'cgst_amount', 'sgst_amount', 'igst_amount', 'total_amount'
             )
+        }),
+        ('Original Currency Amounts', {
+            'fields': (
+                'original_subtotal', 'original_cgst_amount', 'original_sgst_amount',
+                'original_igst_amount', 'original_total_amount'
+            ),
+            'classes': ('collapse',)
         }),
         ('Advance Payment', {
             'fields': (

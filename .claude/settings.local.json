@@ -12,7 +12,14 @@
       "Bash(curl -s http://127.0.0.1:8000/api/auth/login -X POST -H \"Content-Type: application/json\" -d '{\"employee_code\":\"ADMIN001\",\"password\":\"admin@123\"}')",
       "Bash(python -m json.tool)",
       "Bash(xargs ls *)",
-      "Bash(python *)"
+      "Bash(python *)",
+      "Bash(Get-ChildItem -Path \"D:\\\\energypac\" -Recurse -Directory)",
+      "Bash(Select-Object -ExpandProperty FullName)",
+      "Bash(D:\\\\energypac\\\\venv\\\\Scripts\\\\python.exe *)",
+      "PowerShell(& \"D:\\\\energypac\\\\venv\\\\Scripts\\\\python.exe\" \"D:\\\\energypac\\\\manage.py\" makemigrations core requisitions sales purchase_orders work_orders billing)",
+      "PowerShell(& \"D:\\\\energypac\\\\venv\\\\Scripts\\\\python.exe\" -c \"import django; import os; os.environ.setdefault\\('DJANGO_SETTINGS_MODULE', 'erp_energypac.settings'\\); os.chdir\\('D:/energypac'\\); django.setup\\(\\); print\\('Django loaded successfully'\\)\")",
+      "PowerShell(& \"D:\\\\energypac\\\\venv\\\\Scripts\\\\python.exe\" \"D:\\\\energypac\\\\manage.py\" check)",
+      "PowerShell(& \"D:\\\\energypac\\\\venv\\\\Scripts\\\\python.exe\" \"D:\\\\energypac\\\\manage.py\" makemigrations sales)"
     ]
   }
 }

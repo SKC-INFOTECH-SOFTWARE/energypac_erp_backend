@@ -36,7 +36,7 @@ class BillPaymentInline(admin.TabularInline):
 @admin.register(Bill)
 class BillAdmin(admin.ModelAdmin):
     list_display = [
-        'bill_number', 'client_name', 'bill_date', 'total_amount',
+        'bill_number', 'client_name', 'bill_date', 'currency', 'total_amount',
         'net_payable', 'amount_paid', 'balance', 'status', 'created_at'
     ]
     list_filter  = ['status', 'bill_date', 'created_at']
@@ -44,9 +44,13 @@ class BillAdmin(admin.ModelAdmin):
         'bill_number', 'client_name', 'work_order__wo_number'
     ]
     readonly_fields = [
-        'bill_number', 'work_order', 'subtotal', 'cgst_amount',
-        'sgst_amount', 'igst_amount', 'total_amount', 'advance_deducted',
-        'net_payable', 'balance', 'created_at', 'updated_at'
+        'bill_number', 'work_order', 'currency', 'exchange_rate',
+        'subtotal', 'cgst_amount', 'sgst_amount', 'igst_amount', 'total_amount',
+        'original_subtotal', 'original_cgst_amount', 'original_sgst_amount',
+        'original_igst_amount', 'original_total_amount',
+        'original_freight_cost', 'original_net_payable',
+        'advance_deducted', 'net_payable', 'balance',
+        'created_at', 'updated_at'
     ]
     inlines     = [BillItemInline, BillPaymentInline]
     ordering    = ['-bill_number']
@@ -55,18 +59,29 @@ class BillAdmin(admin.ModelAdmin):
 
     fieldsets = (
         ('Bill Details', {
-            'fields': ('bill_number', 'work_order', 'bill_date', 'status')
+            'fields': ('bill_number', 'work_order', 'bill_date', 'bill_type', 'status')
         }),
         ('Client Information', {
             'fields': ('client_name', 'contact_person', 'phone', 'email', 'address')
         }),
-        ('Financial Details', {
+        ('Currency', {
+            'fields': ('currency', 'exchange_rate')
+        }),
+        ('Financial Details (INR)', {
             'fields': (
                 'subtotal',
                 'cgst_percentage', 'sgst_percentage', 'igst_percentage',
                 'cgst_amount',     'sgst_amount',     'igst_amount',
                 'total_amount',
             )
+        }),
+        ('Original Currency Amounts', {
+            'fields': (
+                'original_subtotal',
+                'original_cgst_amount', 'original_sgst_amount', 'original_igst_amount',
+                'original_total_amount', 'original_freight_cost', 'original_net_payable',
+            ),
+            'classes': ('collapse',)
         }),
         ('Advance & Payment', {
             'fields': ('advance_deducted', 'net_payable', 'amount_paid', 'balance')

@@ -76,6 +76,13 @@ from finance.views import (
     FinanceDashboardView,
 )
 
+# Core
+from core.views import (
+    CurrentExchangeRateView,
+    ExchangeRateListCreateView,
+    ExchangeRateDetailView,
+)
+
 
 
 # Create router
@@ -234,6 +241,20 @@ urlpatterns = [
     path('api/dashboard/billing/stats',
         BillingDashboardStatsView.as_view(),
         name='dashboard-billing-stats'),
+
+    # ===== EXCHANGE RATE =====
+    path('api/exchange-rate',
+        CurrentExchangeRateView.as_view(),
+        name='current-exchange-rate'),
+
+    # Admin: Exchange Rate CRUD
+    path('api/admin/exchange-rates',
+        ExchangeRateListCreateView.as_view(),
+        name='admin-exchange-rate-list'),
+
+    path('api/admin/exchange-rates/<uuid:pk>',
+        ExchangeRateDetailView.as_view(),
+        name='admin-exchange-rate-detail'),
 
     # ===== FINANCE / ACCOUNTS =====
     path('api/finance/', include(finance_router.urls)),

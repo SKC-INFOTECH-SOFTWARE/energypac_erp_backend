@@ -14,10 +14,13 @@ class WorkOrderItemSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'product', 'item_code', 'item_name', 'description',
             'hsn_code', 'unit', 'ordered_quantity', 'delivered_quantity',
-            'pending_quantity', 'rate', 'amount', 'stock_available',
+            'pending_quantity', 'rate', 'amount',
+            'original_rate', 'original_amount',
+            'stock_available',
             'stock_quantity', 'stock_status', 'remarks'
         ]
-        read_only_fields = ['id', 'delivered_quantity', 'pending_quantity', 'amount']
+        read_only_fields = ['id', 'delivered_quantity', 'pending_quantity', 'amount',
+                           'original_rate', 'original_amount']
 
     def get_stock_status(self, obj):
         return obj.get_stock_status()
@@ -36,16 +39,23 @@ class WorkOrderSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'wo_number', 'sales_quotation', 'quotation_number', 'wo_date',
             'client_name', 'contact_person', 'phone', 'email', 'address',
+            'currency', 'exchange_rate',
             'subtotal', 'cgst_percentage', 'sgst_percentage', 'igst_percentage',
             'cgst_amount', 'sgst_amount', 'igst_amount', 'total_amount',
+            'original_subtotal', 'original_cgst_amount', 'original_sgst_amount',
+            'original_igst_amount', 'original_total_amount',
             'advance_amount', 'advance_deducted', 'advance_remaining',
             'total_delivered_value', 'remarks', 'status', 'created_by',
             'created_by_name', 'total_items', 'completion_percentage',
             'items', 'created_at', 'updated_at'
         ]
         read_only_fields = [
-            'id', 'wo_number', 'subtotal', 'cgst_amount', 'sgst_amount',
-            'igst_amount', 'total_amount', 'advance_deducted',
+            'id', 'wo_number', 'currency', 'exchange_rate',
+            'subtotal', 'cgst_amount', 'sgst_amount',
+            'igst_amount', 'total_amount',
+            'original_subtotal', 'original_cgst_amount', 'original_sgst_amount',
+            'original_igst_amount', 'original_total_amount',
+            'advance_deducted',
             'advance_remaining', 'total_delivered_value', 'created_at', 'updated_at'
         ]
 
@@ -156,11 +166,13 @@ class WorkOrderCreateSerializer(serializers.Serializer):
         created_by = validated_data.pop('created_by')
         wo_number = validated_data.pop('wo_number', '')
 
-        # Create work order
+        # Create work order (inherit currency from quotation)
         work_order = WorkOrder.objects.create(
-            wo_number=wo_number or '',  # Will auto-generate in save()
+            wo_number=wo_number or '',
             sales_quotation=quotation,
             wo_date=validated_data['wo_date'],
+            currency=quotation.currency,
+            exchange_rate=quotation.exchange_rate,
             client_name=quotation.client_query.client_name,
             contact_person=quotation.client_query.contact_person,
             phone=quotation.client_query.phone,
@@ -174,17 +186,16 @@ class WorkOrderCreateSerializer(serializers.Serializer):
             created_by=created_by
         )
 
-        # Create work order items
         total_subtotal = Decimal('0')
+        original_subtotal = Decimal('0')
 
         for item_data in items_data:
             q_item = SalesQuotationItem.objects.get(id=item_data['quotation_item'])
 
-            # Use override values if provided, otherwise use quotation values
             ordered_qty = item_data.get('ordered_quantity', q_item.quantity)
             rate = item_data.get('rate', q_item.rate)
 
-            WorkOrderItem.objects.create(
+            wo_item = WorkOrderItem.objects.create(
                 work_order=work_order,
                 product=q_item.product,
                 item_code=q_item.item_code,
@@ -194,12 +205,13 @@ class WorkOrderCreateSerializer(serializers.Serializer):
                 unit=q_item.unit,
                 ordered_quantity=ordered_qty,
                 rate=rate,
+                original_rate=q_item.original_rate,
                 remarks=item_data.get('remarks', '')
             )
 
-            total_subtotal += ordered_qty * rate
+            total_subtotal += wo_item.amount
+            original_subtotal += wo_item.original_amount
 
-        # Calculate totals
         work_order.subtotal = total_subtotal
         work_order.cgst_amount = (total_subtotal * work_order.cgst_percentage) / 100
         work_order.sgst_amount = (total_subtotal * work_order.sgst_percentage) / 100
@@ -209,6 +221,17 @@ class WorkOrderCreateSerializer(serializers.Serializer):
             work_order.cgst_amount +
             work_order.sgst_amount +
             work_order.igst_amount
+        )
+
+        work_order.original_subtotal = original_subtotal
+        work_order.original_cgst_amount = (original_subtotal * work_order.cgst_percentage) / 100
+        work_order.original_sgst_amount = (original_subtotal * work_order.sgst_percentage) / 100
+        work_order.original_igst_amount = (original_subtotal * work_order.igst_percentage) / 100
+        work_order.original_total_amount = (
+            original_subtotal +
+            work_order.original_cgst_amount +
+            work_order.original_sgst_amount +
+            work_order.original_igst_amount
         )
         work_order.save()
 

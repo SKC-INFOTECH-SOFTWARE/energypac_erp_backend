@@ -11,12 +11,13 @@ class PurchaseOrderItemInline(admin.TabularInline):
 @admin.register(PurchaseOrder)
 class PurchaseOrderAdmin(admin.ModelAdmin):
     list_display  = [
-        'po_number', 'vendor', 'po_date', 'total_amount', 'status', 'cancelled_at'
+        'po_number', 'vendor', 'po_date', 'currency', 'total_amount', 'status', 'cancelled_at'
     ]
-    list_filter   = ['status', 'po_date']
+    list_filter   = ['status', 'currency', 'po_date']
     search_fields = ['po_number', 'vendor__vendor_name']
     readonly_fields = [
-        'po_number', 'total_amount',
+        'po_number', 'currency', 'exchange_rate',
+        'total_amount', 'original_total_amount',
         'cancelled_by', 'cancelled_at',
         'created_at', 'updated_at',
     ]
@@ -26,8 +27,11 @@ class PurchaseOrderAdmin(admin.ModelAdmin):
         ('PO Details', {
             'fields': ('po_number', 'requisition', 'vendor', 'po_date', 'remarks', 'status')
         }),
+        ('Currency', {
+            'fields': ('currency', 'exchange_rate')
+        }),
         ('Financial', {
-            'fields': ('total_amount',)
+            'fields': ('total_amount', 'original_total_amount')
         }),
         ('Cancellation', {
             'fields': ('cancellation_reason', 'cancelled_by', 'cancelled_at'),
