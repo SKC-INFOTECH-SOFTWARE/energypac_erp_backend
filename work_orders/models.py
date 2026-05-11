@@ -270,15 +270,21 @@ class WorkOrderItem(models.Model):
         verbose_name_plural = 'Work Order Items'
 
     def save(self, *args, **kwargs):
-        self.amount = self.ordered_quantity * self.rate
-        self.pending_quantity = self.ordered_quantity - self.delivered_quantity
+        from decimal import Decimal
+
+        ordered_qty = Decimal(str(self.ordered_quantity))
+        rate = Decimal(str(self.rate))
+        self.amount = ordered_qty * rate
+        self.pending_quantity = ordered_qty - Decimal(str(self.delivered_quantity))
 
         currency = self.work_order.currency
         if currency == 'USD' and self.work_order.exchange_rate:
-            self.original_rate = self.original_rate or (self.rate / self.work_order.exchange_rate)
-            self.original_amount = self.ordered_quantity * self.original_rate
+            ex_rate = Decimal(str(self.work_order.exchange_rate))
+            orig_rate = Decimal(str(self.original_rate)) if self.original_rate else (rate / ex_rate)
+            self.original_rate = orig_rate
+            self.original_amount = ordered_qty * Decimal(str(self.original_rate))
         else:
-            self.original_rate = self.rate
+            self.original_rate = rate
             self.original_amount = self.amount
 
         if self.product:

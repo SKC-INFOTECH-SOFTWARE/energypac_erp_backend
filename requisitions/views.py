@@ -192,8 +192,13 @@ class VendorQuotationViewSet(viewsets.ModelViewSet):
         return VendorQuotationSerializer
 
     def perform_create(self, serializer):
-        serializer.validated_data['created_by'] = self.request.user
-        serializer.save()
+        try:
+            serializer.validated_data['created_by'] = self.request.user
+            serializer.save()
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            raise
 
     def destroy(self, request, *args, **kwargs):
         return Response(

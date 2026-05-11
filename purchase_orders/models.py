@@ -122,8 +122,9 @@ class PurchaseOrder(models.Model):
             self.original_items_total = sum(
                 item.original_amount for item in self.items.all()
             )
+            ex_rate = Decimal(str(self.exchange_rate))
             self.original_freight_cost = self.original_freight_cost or (
-                self.freight_cost / self.exchange_rate if self.exchange_rate else self.freight_cost
+                Decimal(str(self.freight_cost)) / ex_rate if ex_rate else self.freight_cost
             )
             self.original_total_amount = self.original_items_total + self.original_freight_cost
         else:
@@ -233,14 +234,20 @@ class PurchaseOrderItem(models.Model):
         db_table = 'purchase_order_items'
 
     def save(self, *args, **kwargs):
-        self.amount = self.quantity * self.rate
+        from decimal import Decimal
+
+        quantity = Decimal(str(self.quantity))
+        rate = Decimal(str(self.rate))
+        self.amount = quantity * rate
 
         currency = self.po.currency
         if currency == 'USD' and self.po.exchange_rate:
-            self.original_rate = self.original_rate or (self.rate / self.po.exchange_rate)
-            self.original_amount = self.quantity * self.original_rate
+            ex_rate = Decimal(str(self.po.exchange_rate))
+            orig_rate = Decimal(str(self.original_rate)) if self.original_rate else (rate / ex_rate)
+            self.original_rate = orig_rate
+            self.original_amount = quantity * Decimal(str(self.original_rate))
         else:
-            self.original_rate = self.rate
+            self.original_rate = rate
             self.original_amount = self.amount
 
         super().save(*args, **kwargs)

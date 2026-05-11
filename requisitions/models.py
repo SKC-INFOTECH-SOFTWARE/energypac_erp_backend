@@ -222,15 +222,15 @@ class VendorQuotationItem(models.Model):
         help_text="Reference to assigned item"
     )
     product = models.ForeignKey(Product, on_delete=models.PROTECT)
-    quantity = models.DecimalField(max_digits=10, decimal_places=2)
+    quantity = models.DecimalField(max_digits=10, decimal_places=4)
     quoted_rate = models.DecimalField(
         max_digits=10,
-        decimal_places=2,
+        decimal_places=4,
         help_text="Rate quoted by vendor per unit in INR (without tax)"
     )
     amount = models.DecimalField(
         max_digits=12,
-        decimal_places=2,
+        decimal_places=4,
         null=True,
         blank=True,
         help_text="quantity × quoted_rate in INR (without tax)"
@@ -238,11 +238,11 @@ class VendorQuotationItem(models.Model):
 
     # ── Original currency amounts ────────────────────────────────────────
     original_quoted_rate = models.DecimalField(
-        max_digits=10, decimal_places=2, default=0,
+        max_digits=10, decimal_places=4, default=0,
         help_text="Rate in original currency (same as quoted_rate if INR)"
     )
     original_amount = models.DecimalField(
-        max_digits=12, decimal_places=2, default=0,
+        max_digits=12, decimal_places=4, default=0,
         help_text="Amount in original currency (same as amount if INR)"
     )
 
@@ -254,17 +254,22 @@ class VendorQuotationItem(models.Model):
         verbose_name_plural = 'Quotation Items'
 
     def save(self, *args, **kwargs):
+        from decimal import Decimal
+
         currency = self.quotation.currency
-        rate = self.quotation.exchange_rate
+        rate = Decimal(str(self.quotation.exchange_rate))
+        quantity = Decimal(str(self.quantity))
+        quoted_rate = Decimal(str(self.quoted_rate))
 
         if currency == 'USD':
-            self.original_quoted_rate = self.original_quoted_rate or self.quoted_rate
-            self.original_amount = self.quantity * self.original_quoted_rate
-            self.quoted_rate = self.original_quoted_rate * rate
-            self.amount = self.quantity * self.quoted_rate
+            orig_rate = Decimal(str(self.original_quoted_rate)) if self.original_quoted_rate else quoted_rate
+            self.original_quoted_rate = orig_rate
+            self.original_amount = quantity * orig_rate
+            self.quoted_rate = orig_rate * rate
+            self.amount = quantity * Decimal(str(self.quoted_rate))
         else:
-            self.amount = self.quantity * self.quoted_rate
-            self.original_quoted_rate = self.quoted_rate
+            self.amount = quantity * quoted_rate
+            self.original_quoted_rate = quoted_rate
             self.original_amount = self.amount
 
         super().save(*args, **kwargs)

@@ -310,7 +310,12 @@ class SalesQuotationUpdateSerializer(serializers.ModelSerializer):
         new_currency = validated_data.get('currency')
         if new_currency and new_currency != instance.currency:
             if new_currency == 'USD':
-                validated_data['exchange_rate'] = ExchangeRate.get_current_rate()
+                try:
+                    validated_data['exchange_rate'] = ExchangeRate.get_current_rate()
+                except ValueError as e:
+                    raise serializers.ValidationError({
+                        'currency': str(e)
+                    })
             else:
                 validated_data['exchange_rate'] = 1
 
@@ -417,7 +422,12 @@ class SalesQuotationCreateSerializer(serializers.Serializer):
 
         exchange_rate = 1
         if currency == 'USD':
-            exchange_rate = ExchangeRate.get_current_rate()
+            try:
+                exchange_rate = ExchangeRate.get_current_rate()
+            except ValueError as e:
+                raise serializers.ValidationError({
+                    'currency': str(e)
+                })
 
         quotation = SalesQuotation.objects.create(
             client_query    = client_query,

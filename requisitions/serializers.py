@@ -263,7 +263,7 @@ class VendorQuotationSerializer(serializers.ModelSerializer):
 class QuotationItemInputSerializer(serializers.Serializer):
     vendor_item = serializers.UUIDField(required=True)
     quoted_rate = serializers.DecimalField(
-        max_digits=10, decimal_places=2, required=True,
+        max_digits=10, decimal_places=4, required=True,
         help_text="Rate quoted by vendor per unit"
     )
     tax_percentage = serializers.DecimalField(
@@ -326,7 +326,12 @@ class VendorQuotationCreateSerializer(serializers.Serializer):
 
         exchange_rate = 1
         if currency == 'USD':
-            exchange_rate = ExchangeRate.get_current_rate()
+            try:
+                exchange_rate = ExchangeRate.get_current_rate()
+            except ValueError as e:
+                raise serializers.ValidationError({
+                    'currency': str(e)
+                })
 
         quotation = VendorQuotation.objects.create(
             assignment=assignment,
@@ -343,31 +348,42 @@ class VendorQuotationCreateSerializer(serializers.Serializer):
         total_amount = 0
         original_total = 0
         for item_data in items_data:
-            vendor_item = VendorRequisitionItem.objects.get(id=item_data['vendor_item'])
+            try:
+                vendor_item = VendorRequisitionItem.objects.get(id=item_data['vendor_item'])
+            except VendorRequisitionItem.DoesNotExist:
+                raise serializers.ValidationError({
+                    'items': f"Vendor item {item_data['vendor_item']} not found"
+                })
+
             quoted_rate = item_data['quoted_rate']
 
-            if currency == 'USD':
-                quotation_item = VendorQuotationItem.objects.create(
-                    quotation=quotation,
-                    vendor_item=vendor_item,
-                    product=vendor_item.product,
-                    quantity=vendor_item.quantity,
-                    original_quoted_rate=quoted_rate,
-                    quoted_rate=quoted_rate,
-                    remarks=item_data.get('remarks', '')
-                )
-            else:
-                quotation_item = VendorQuotationItem.objects.create(
-                    quotation=quotation,
-                    vendor_item=vendor_item,
-                    product=vendor_item.product,
-                    quantity=vendor_item.quantity,
-                    quoted_rate=quoted_rate,
-                    remarks=item_data.get('remarks', '')
-                )
+            try:
+                if currency == 'USD':
+                    quotation_item = VendorQuotationItem.objects.create(
+                        quotation=quotation,
+                        vendor_item=vendor_item,
+                        product=vendor_item.product,
+                        quantity=vendor_item.quantity,
+                        original_quoted_rate=quoted_rate,
+                        quoted_rate=quoted_rate,
+                        remarks=item_data.get('remarks', '')
+                    )
+                else:
+                    quotation_item = VendorQuotationItem.objects.create(
+                        quotation=quotation,
+                        vendor_item=vendor_item,
+                        product=vendor_item.product,
+                        quantity=vendor_item.quantity,
+                        quoted_rate=quoted_rate,
+                        remarks=item_data.get('remarks', '')
+                    )
 
-            total_amount += quotation_item.amount
-            original_total += quotation_item.original_amount
+                total_amount += quotation_item.amount
+                original_total += quotation_item.original_amount
+            except Exception as e:
+                raise serializers.ValidationError({
+                    'items': f"Error creating item: {str(e)}"
+                })
 
         quotation.total_amount = total_amount
         quotation.original_total_amount = original_total

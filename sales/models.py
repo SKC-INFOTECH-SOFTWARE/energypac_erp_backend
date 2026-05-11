@@ -310,16 +310,19 @@ class SalesQuotationItem(models.Model):
                 self.description = self.product.description
 
         currency = self.quotation.currency
-        ex_rate = self.quotation.exchange_rate
+        ex_rate = Decimal(str(self.quotation.exchange_rate))
+        quantity = Decimal(str(self.quantity))
+        rate = Decimal(str(self.rate))
 
         if currency == 'USD':
-            self.original_rate = self.original_rate or self.rate
-            self.original_amount = self.quantity * self.original_rate
-            self.rate = self.original_rate * ex_rate
-            self.amount = self.quantity * self.rate
+            orig_rate = Decimal(str(self.original_rate)) if self.original_rate else rate
+            self.original_rate = orig_rate
+            self.original_amount = quantity * orig_rate
+            self.rate = orig_rate * ex_rate
+            self.amount = quantity * Decimal(str(self.rate))
         else:
-            self.amount = self.quantity * self.rate
-            self.original_rate = self.rate
+            self.amount = quantity * rate
+            self.original_rate = rate
             self.original_amount = self.amount
 
         super().save(*args, **kwargs)
