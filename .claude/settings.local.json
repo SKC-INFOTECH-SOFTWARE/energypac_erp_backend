@@ -19,7 +19,11 @@
       "PowerShell(& \"D:\\\\energypac\\\\venv\\\\Scripts\\\\python.exe\" \"D:\\\\energypac\\\\manage.py\" makemigrations core requisitions sales purchase_orders work_orders billing)",
       "PowerShell(& \"D:\\\\energypac\\\\venv\\\\Scripts\\\\python.exe\" -c \"import django; import os; os.environ.setdefault\\('DJANGO_SETTINGS_MODULE', 'erp_energypac.settings'\\); os.chdir\\('D:/energypac'\\); django.setup\\(\\); print\\('Django loaded successfully'\\)\")",
       "PowerShell(& \"D:\\\\energypac\\\\venv\\\\Scripts\\\\python.exe\" \"D:\\\\energypac\\\\manage.py\" check)",
-      "PowerShell(& \"D:\\\\energypac\\\\venv\\\\Scripts\\\\python.exe\" \"D:\\\\energypac\\\\manage.py\" makemigrations sales)"
+      "PowerShell(& \"D:\\\\energypac\\\\venv\\\\Scripts\\\\python.exe\" \"D:\\\\energypac\\\\manage.py\" makemigrations sales)",
+      "PowerShell(python D:\\\\energypac\\\\manage.py shell -c \"from accounts.models import User; u = User.objects.first\\(\\); print\\(u.email, u.id\\)\")",
+      "PowerShell(D:\\\\energypac\\\\venv\\\\Scripts\\\\python.exe D:\\\\energypac\\\\manage.py shell -c \"from accounts.models import User; u = User.objects.first\\(\\); print\\(u.email, u.id\\)\")",
+      "PowerShell(D:\\\\energypac\\\\venv\\\\Scripts\\\\python.exe D:\\\\energypac\\\\manage.py makemigrations requisitions --name=\"unique_vendor_per_requisition\")",
+      "PowerShell(D:\\\\energypac\\\\venv\\\\Scripts\\\\python.exe D:\\\\energypac\\\\manage.py migrate)"
     ]
   }
 }

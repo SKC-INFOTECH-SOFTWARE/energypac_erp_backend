@@ -134,7 +134,7 @@ class VendorAssignmentViewSet(viewsets.ModelViewSet):
     permission_classes = [PurchaseModulePermission]
     queryset = VendorRequisitionAssignment.objects.all().select_related(
         'requisition', 'vendor', 'assigned_by'
-    ).prefetch_related('items__product')
+    ).prefetch_related('items__product', 'quotations')
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     filterset_fields = ['requisition', 'vendor', 'assignment_date']
     search_fields = ['requisition__requisition_number', 'vendor__vendor_name']

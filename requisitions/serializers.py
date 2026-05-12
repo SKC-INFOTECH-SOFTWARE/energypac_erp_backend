@@ -1,4 +1,5 @@
 from rest_framework import serializers
+from django.db import transaction
 from .models import (Requisition, RequisitionItem,
                      VendorRequisitionAssignment, VendorRequisitionItem,
                      VendorQuotation, VendorQuotationItem)
@@ -87,39 +88,41 @@ class RequisitionUpdateSerializer(serializers.ModelSerializer):
     def update(self, instance, validated_data):
         items_data = validated_data.pop('items', None)
 
-        # 1. Update header fields
-        for attr, value in validated_data.items():
-            setattr(instance, attr, value)
-        instance.save()
+        with transaction.atomic():
+            for attr, value in validated_data.items():
+                setattr(instance, attr, value)
+            instance.save()
 
-        # 2. Sync items only if items were provided in the payload
-        if items_data is not None:
-            existing_items = {str(item.id): item for item in instance.items.all()}
-            submitted_ids = set()
+            if items_data is not None:
+                existing_items = {str(item.id): item for item in instance.items.all()}
+                submitted_ids = set()
 
-            for item_data in items_data:
-                item_id = item_data.pop('id', None)
+                for item_data in items_data:
+                    item_id = item_data.pop('id', None)
 
-                if item_id and str(item_id) in existing_items:
-                    # UPDATE existing item
-                    item = existing_items[str(item_id)]
-                    for attr, value in item_data.items():
-                        setattr(item, attr, value)
-                    item.save()
-                    submitted_ids.add(str(item_id))
-                else:
-                    # CREATE new item
-                    new_item = RequisitionItem.objects.create(
-                        requisition=instance, **item_data
-                    )
-                    submitted_ids.add(str(new_item.id))
+                    if item_id and str(item_id) in existing_items:
+                        item = existing_items[str(item_id)]
+                        for attr, value in item_data.items():
+                            setattr(item, attr, value)
+                        item.save()
+                        submitted_ids.add(str(item_id))
+                    else:
+                        new_item = RequisitionItem.objects.create(
+                            requisition=instance, **item_data
+                        )
+                        submitted_ids.add(str(new_item.id))
 
-            # DELETE items that were not in the payload
-            for item_id, item in existing_items.items():
-                if item_id not in submitted_ids:
-                    item.delete()
+                for item_id, item in existing_items.items():
+                    if item_id not in submitted_ids:
+                        has_vendor_items = VendorRequisitionItem.objects.filter(
+                            requisition_item=item
+                        ).exists()
+                        if has_vendor_items:
+                            raise serializers.ValidationError({
+                                'items': f'Cannot remove item "{item.product.item_name}" — it is assigned to a vendor.'
+                            })
+                        item.delete()
 
-        # Return full representation using the read serializer
         return instance
 
     def to_representation(self, instance):
@@ -147,16 +150,22 @@ class VendorRequisitionAssignmentSerializer(serializers.ModelSerializer):
     assigned_by_name = serializers.CharField(source='assigned_by.get_full_name',
                                               read_only=True)
     total_items = serializers.SerializerMethodField()
+    status = serializers.SerializerMethodField()
 
     class Meta:
         model = VendorRequisitionAssignment
         fields = ['id', 'requisition', 'requisition_number', 'vendor',
                   'vendor_details', 'assignment_date', 'remarks', 'assigned_by',
-                  'assigned_by_name', 'total_items', 'items', 'created_at']
+                  'assigned_by_name', 'status', 'total_items', 'items', 'created_at']
         read_only_fields = ['id', 'assignment_date', 'assigned_by', 'created_at']
 
     def get_total_items(self, obj):
         return obj.items.count()
+
+    def get_status(self, obj):
+        if obj.quotations.exists():
+            return 'Completed'
+        return 'Pending'
 
 class VendorAssignmentCreateSerializer(serializers.Serializer):
     """Serializer for creating vendor assignments"""
@@ -190,6 +199,16 @@ class VendorAssignmentCreateSerializer(serializers.Serializer):
         if not value:
             raise serializers.ValidationError("At least one item is required")
         return value
+
+    def validate(self, data):
+        if VendorRequisitionAssignment.objects.filter(
+            requisition_id=data['requisition'],
+            vendor_id=data['vendor']
+        ).exists():
+            raise serializers.ValidationError(
+                "This vendor is already assigned to this requisition."
+            )
+        return data
 
     def create(self, validated_data):
         items_data = validated_data.pop('items')

@@ -88,6 +88,12 @@ class VendorRequisitionAssignment(models.Model):
         ordering = ['-created_at']
         verbose_name = 'Vendor Assignment'
         verbose_name_plural = 'Vendor Assignments'
+        constraints = [
+            models.UniqueConstraint(
+                fields=['requisition', 'vendor'],
+                name='unique_vendor_per_requisition'
+            )
+        ]
 
     def __str__(self):
         return f"{self.requisition.requisition_number} - {self.vendor.vendor_name}"
