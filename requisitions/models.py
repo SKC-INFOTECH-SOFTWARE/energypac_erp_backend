@@ -2,7 +2,7 @@ from django.db import models
 from django.conf import settings
 from inventory.models import Product
 from vendors.models import Vendor
-from core.models import CURRENCY_CHOICES, ExchangeRate
+from core.models import CURRENCY_CHOICES
 import uuid
 from decimal import Decimal
 from datetime import datetime
@@ -10,8 +10,8 @@ from datetime import datetime
 class Requisition(models.Model):
     """Requisition/Purchase Request"""
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    requisition_number = models.CharField(max_length=50, unique=True, editable=False,
-                                          help_text="Auto-generated: EEL/YEAR/NUMBER")
+    requisition_number = models.CharField(max_length=50, unique=True,
+                                          help_text="Manual entry or auto-generated: EEL/YEAR/NUMBER")
     requisition_date = models.DateField(help_text="Date of requisition")
     remarks = models.TextField(blank=True, help_text="Additional notes")
     created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
@@ -151,23 +151,13 @@ class VendorQuotation(models.Model):
         max_length=3, choices=CURRENCY_CHOICES, default='INR',
         help_text="Currency in which vendor quoted"
     )
-    exchange_rate = models.DecimalField(
-        max_digits=10, decimal_places=4, default=1,
-        help_text="USD to INR rate at time of quotation (1 if INR)"
-    )
 
-    # ── Amounts (always INR internally) ──────────────────────────────────
+    # ── Amounts (in the quotation's stated currency) ─────────────────────
     total_amount = models.DecimalField(
         max_digits=12,
         decimal_places=2,
         default=0,
-        help_text="Total quotation amount in INR (without tax)"
-    )
-
-    # ── Original currency amounts ────────────────────────────────────────
-    original_total_amount = models.DecimalField(
-        max_digits=12, decimal_places=2, default=0,
-        help_text="Total in original currency (same as total_amount if INR)"
+        help_text="Total quotation amount (without tax)"
     )
 
     is_selected = models.BooleanField(
@@ -232,24 +222,14 @@ class VendorQuotationItem(models.Model):
     quoted_rate = models.DecimalField(
         max_digits=10,
         decimal_places=4,
-        help_text="Rate quoted by vendor per unit in INR (without tax)"
+        help_text="Rate quoted by vendor per unit (without tax)"
     )
     amount = models.DecimalField(
         max_digits=12,
         decimal_places=4,
         null=True,
         blank=True,
-        help_text="quantity × quoted_rate in INR (without tax)"
-    )
-
-    # ── Original currency amounts ────────────────────────────────────────
-    original_quoted_rate = models.DecimalField(
-        max_digits=10, decimal_places=4, default=0,
-        help_text="Rate in original currency (same as quoted_rate if INR)"
-    )
-    original_amount = models.DecimalField(
-        max_digits=12, decimal_places=4, default=0,
-        help_text="Amount in original currency (same as amount if INR)"
+        help_text="quantity × quoted_rate (without tax)"
     )
 
     remarks = models.TextField(blank=True)
@@ -261,23 +241,7 @@ class VendorQuotationItem(models.Model):
 
     def save(self, *args, **kwargs):
         from decimal import Decimal
-
-        currency = self.quotation.currency
-        rate = Decimal(str(self.quotation.exchange_rate))
-        quantity = Decimal(str(self.quantity))
-        quoted_rate = Decimal(str(self.quoted_rate))
-
-        if currency == 'USD':
-            orig_rate = Decimal(str(self.original_quoted_rate)) if self.original_quoted_rate else quoted_rate
-            self.original_quoted_rate = orig_rate
-            self.original_amount = quantity * orig_rate
-            self.quoted_rate = orig_rate * rate
-            self.amount = quantity * Decimal(str(self.quoted_rate))
-        else:
-            self.amount = quantity * quoted_rate
-            self.original_quoted_rate = quoted_rate
-            self.original_amount = self.amount
-
+        self.amount = Decimal(str(self.quantity)) * Decimal(str(self.quoted_rate))
         super().save(*args, **kwargs)
 
     def __str__(self):

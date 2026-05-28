@@ -1,5 +1,14 @@
 from django.contrib import admin
-from .models import ExchangeRate
+from .models import Currency, ExchangeRate
+
+
+@admin.register(Currency)
+class CurrencyAdmin(admin.ModelAdmin):
+    list_display = ('code', 'name', 'symbol', 'is_active', 'created_at')
+    list_filter = ('is_active',)
+    search_fields = ('code', 'name')
+    readonly_fields = ('id', 'created_at', 'updated_at')
+    ordering = ('code',)
 
 
 @admin.register(ExchangeRate)

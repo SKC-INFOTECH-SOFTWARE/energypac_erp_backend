@@ -18,8 +18,7 @@ from requisitions.views import RequisitionViewSet, VendorAssignmentViewSet
 from requisitions.views import VendorQuotationViewSet
 from purchase_orders.views import PurchaseOrderViewSet
 from dashboard.views import DashboardStatsView
-from work_orders.views import WorkOrderViewSet
-from billing.views import BillViewSet
+from billing.views import PIBillViewSet
 from inventory.views_bulk_upload import ProductBulkUploadView, ProductBulkUploadTemplateView
 from reports.views import (
     # Requisition Reports
@@ -43,7 +42,8 @@ from reports.views import (
 from sales.views import (
     ClientQueryViewSet,
     SalesQuotationViewSet,
-    SalesQuotationItemViewSet
+    SalesQuotationItemViewSet,
+    ProformaInvoiceViewSet,
 )
 from sales.reports_views import (
     ClientQueryReportView,
@@ -56,31 +56,45 @@ from sales.reports_views import (
     ProductSalesAnalysisView,
 )
 
-from billing.reports_views import (
-    BillReportView,
-    BillDetailedReportView,
-    BillingAnalyticsView,
-    OutstandingPaymentsReportView,
-    WorkOrderReportView,
-    WorkOrderDetailedReportView,
-    WorkOrderDeliveryAnalysisView,
-    BillingDashboardStatsView,
-)
 
 # Finance app imports
 from finance.views import (
     PurchaseOrderFinanceViewSet,
-    BillFinanceViewSet,
+    PIFinanceViewSet,
+    AdvancePaymentViewSet,
     AllPurchasePaymentsListView,
-    AllIncomingPaymentsListView,
+    AllPIPaymentsListView,
     FinanceDashboardView,
+    ProfitLossReportView,
+    ProfitLossItemReportView,
+    ProfitPreviewView,
+    ItemAnalyticsView,
+    ItemInsightsView,
+    InventoryAgingView,
+    DueDateTrackingView,
+    ReconciliationView,
+    FinanceValidationView,
 )
 
 # Core
 from core.views import (
+    CurrencyViewSet,
     CurrentExchangeRateView,
     ExchangeRateListCreateView,
     ExchangeRateDetailView,
+)
+
+# Audit Logs
+from audit_logs.views import AuditLogListView, AuditLogByObjectView
+
+# Transport
+from transport.views import (
+    TransportEntryViewSet,
+    TransportCostByPOReportView,
+    TransportCostByVendorReportView,
+    TransportCostBreakdownReportView,
+    LandedCostReportView,
+    TransportDashboardView,
 )
 
 
@@ -96,8 +110,10 @@ router.register(r'purchase-orders', PurchaseOrderViewSet, basename='purchase-ord
 router.register(r'client-queries', ClientQueryViewSet, basename='client-query')
 router.register(r'quotations', SalesQuotationViewSet, basename='sales-quotation')
 router.register(r'quotation-items', SalesQuotationItemViewSet, basename='quotation-item')
-router.register(r'work-orders', WorkOrderViewSet, basename='work-order')
-router.register(r'bills', BillViewSet, basename='bill')
+router.register(r'pi-bills', PIBillViewSet, basename='pi-bill')
+router.register(r'transport', TransportEntryViewSet, basename='transport')
+router.register(r'currencies', CurrencyViewSet, basename='currency')
+router.register(r'proforma-invoices', ProformaInvoiceViewSet, basename='proforma-invoice')
 
 # Admin router
 admin_router = DefaultRouter(trailing_slash=False)
@@ -106,7 +122,8 @@ admin_router.register(r'users', AdminUserViewSet, basename='admin-user')
 # Finance router
 finance_router = DefaultRouter(trailing_slash=False)
 finance_router.register(r'purchase-orders', PurchaseOrderFinanceViewSet, basename='finance-purchase-order')
-finance_router.register(r'bills', BillFinanceViewSet, basename='finance-bill')
+finance_router.register(r'proforma-invoices', PIFinanceViewSet, basename='finance-pi')
+finance_router.register(r'advance-payments', AdvancePaymentViewSet, basename='finance-advance')
 
 urlpatterns = [
     path('admin/', admin.site.urls),
@@ -207,41 +224,6 @@ urlpatterns = [
 
 
 
-    # ===== BILLING REPORTS =====
-    path('api/reports/billing/bills',
-        BillReportView.as_view(),
-        name='report-bills'),
-
-    path('api/reports/billing/bills/<uuid:pk>/detailed',
-        BillDetailedReportView.as_view(),
-        name='report-bill-detailed'),
-
-    path('api/reports/billing/analytics',
-        BillingAnalyticsView.as_view(),
-        name='report-billing-analytics'),
-
-    path('api/reports/billing/outstanding',
-        OutstandingPaymentsReportView.as_view(),
-        name='report-outstanding-payments'),
-
-    # ===== WORK ORDER REPORTS =====
-    path('api/reports/work-orders',
-        WorkOrderReportView.as_view(),
-        name='report-work-orders'),
-
-    path('api/reports/work-orders/<uuid:pk>/detailed',
-        WorkOrderDetailedReportView.as_view(),
-        name='report-work-order-detailed'),
-
-    path('api/reports/work-orders/delivery-analysis',
-        WorkOrderDeliveryAnalysisView.as_view(),
-        name='report-work-order-delivery-analysis'),
-
-    # ===== BILLING DASHBOARD =====
-    path('api/dashboard/billing/stats',
-        BillingDashboardStatsView.as_view(),
-        name='dashboard-billing-stats'),
-
     # ===== EXCHANGE RATE =====
     path('api/exchange-rate',
         CurrentExchangeRateView.as_view(),
@@ -256,6 +238,15 @@ urlpatterns = [
         ExchangeRateDetailView.as_view(),
         name='admin-exchange-rate-detail'),
 
+    # ===== AUDIT LOGS =====
+    path('api/audit-logs',
+        AuditLogListView.as_view(),
+        name='audit-log-list'),
+
+    path('api/audit-logs/<str:model_name>/<str:object_id>',
+        AuditLogByObjectView.as_view(),
+        name='audit-log-by-object'),
+
     # ===== FINANCE / ACCOUNTS =====
     path('api/finance/', include(finance_router.urls)),
 
@@ -264,13 +255,74 @@ urlpatterns = [
         AllPurchasePaymentsListView.as_view(),
         name='finance-all-purchase-payments'),
 
-    path('api/finance/all-incoming-payments',
-        AllIncomingPaymentsListView.as_view(),
-        name='finance-all-incoming-payments'),
-
     # Finance dashboard
     path('api/finance/dashboard',
         FinanceDashboardView.as_view(),
         name='finance-dashboard'),
+
+    # PI payments list
+    path('api/finance/all-pi-payments',
+        AllPIPaymentsListView.as_view(),
+        name='finance-all-pi-payments'),
+
+    # Profit & Loss
+    path('api/finance/profit-loss',
+        ProfitLossReportView.as_view(),
+        name='finance-profit-loss'),
+
+    path('api/finance/profit-loss/items',
+        ProfitLossItemReportView.as_view(),
+        name='finance-profit-loss-items'),
+
+    path('api/finance/profit-preview',
+        ProfitPreviewView.as_view(),
+        name='finance-profit-preview'),
+
+    # Item Analytics
+    path('api/finance/items/analytics',
+        ItemAnalyticsView.as_view(),
+        name='finance-item-analytics'),
+
+    path('api/finance/items/insights',
+        ItemInsightsView.as_view(),
+        name='finance-item-insights'),
+
+    path('api/finance/items/aging',
+        InventoryAgingView.as_view(),
+        name='finance-inventory-aging'),
+
+    # Due dates & Reconciliation
+    path('api/finance/due-dates',
+        DueDateTrackingView.as_view(),
+        name='finance-due-dates'),
+
+    path('api/finance/reconciliation',
+        ReconciliationView.as_view(),
+        name='finance-reconciliation'),
+
+    path('api/finance/validation',
+        FinanceValidationView.as_view(),
+        name='finance-validation'),
+
+    # ===== TRANSPORT REPORTS =====
+    path('api/reports/transport/by-po',
+        TransportCostByPOReportView.as_view(),
+        name='report-transport-by-po'),
+
+    path('api/reports/transport/by-vendor',
+        TransportCostByVendorReportView.as_view(),
+        name='report-transport-by-vendor'),
+
+    path('api/reports/transport/cost-breakdown',
+        TransportCostBreakdownReportView.as_view(),
+        name='report-transport-cost-breakdown'),
+
+    path('api/reports/transport/landed-cost',
+        LandedCostReportView.as_view(),
+        name='report-landed-cost'),
+
+    path('api/dashboard/transport',
+        TransportDashboardView.as_view(),
+        name='dashboard-transport'),
 
 ]

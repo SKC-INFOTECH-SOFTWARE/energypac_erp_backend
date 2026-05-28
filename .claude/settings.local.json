@@ -23,7 +23,24 @@
       "PowerShell(python D:\\\\energypac\\\\manage.py shell -c \"from accounts.models import User; u = User.objects.first\\(\\); print\\(u.email, u.id\\)\")",
       "PowerShell(D:\\\\energypac\\\\venv\\\\Scripts\\\\python.exe D:\\\\energypac\\\\manage.py shell -c \"from accounts.models import User; u = User.objects.first\\(\\); print\\(u.email, u.id\\)\")",
       "PowerShell(D:\\\\energypac\\\\venv\\\\Scripts\\\\python.exe D:\\\\energypac\\\\manage.py makemigrations requisitions --name=\"unique_vendor_per_requisition\")",
-      "PowerShell(D:\\\\energypac\\\\venv\\\\Scripts\\\\python.exe D:\\\\energypac\\\\manage.py migrate)"
+      "PowerShell(D:\\\\energypac\\\\venv\\\\Scripts\\\\python.exe D:\\\\energypac\\\\manage.py migrate)",
+      "Bash(Get-ChildItem -Force)",
+      "Bash(Select-Object Name, FullName)",
+      "PowerShell(& \"D:\\\\energypac\\\\venv\\\\Scripts\\\\python.exe\" \"D:\\\\energypac\\\\manage.py\" makemigrations requisitions purchase_orders sales work_orders billing audit_logs)",
+      "PowerShell(& \"D:\\\\energypac\\\\venv\\\\Scripts\\\\python.exe\" \"D:\\\\energypac\\\\manage.py\" migrate --check 2>&1)",
+      "PowerShell(& \"D:\\\\energypac\\\\venv\\\\Scripts\\\\python.exe\" \"D:\\\\energypac\\\\manage.py\" showmigrations audit_logs billing purchase_orders requisitions sales work_orders)",
+      "PowerShell(& \"D:\\\\energypac\\\\venv\\\\Scripts\\\\python.exe\" \"D:\\\\energypac\\\\manage.py\" migrate)",
+      "PowerShell(& \"D:\\\\energypac\\\\venv\\\\Scripts\\\\python.exe\" \"D:\\\\energypac\\\\manage.py\" makemigrations inventory purchase_orders)",
+      "PowerShell(& \"D:\\\\energypac\\\\venv\\\\Scripts\\\\python.exe\" -c \"import django; import os; os.environ['DJANGO_SETTINGS_MODULE']='erp_energypac.settings'; django.setup\\(\\); from purchase_orders.models import PurchaseOrderItem; print\\('Total items:', PurchaseOrderItem.objects.count\\(\\)\\); print\\('Null quotation_item:', PurchaseOrderItem.objects.filter\\(quotation_item__isnull=True\\).count\\(\\)\\)\")",
+      "PowerShell(& \"D:\\\\energypac\\\\venv\\\\Scripts\\\\python.exe\" \"D:\\\\energypac\\\\manage.py\" migrate purchase_orders)",
+      "PowerShell(& \"D:\\\\energypac\\\\venv\\\\Scripts\\\\python.exe\" \"D:\\\\energypac\\\\manage.py\" startapp transport)",
+      "PowerShell(& \"D:\\\\energypac\\\\venv\\\\Scripts\\\\python.exe\" \"D:\\\\energypac\\\\manage.py\" makemigrations core purchase_orders)",
+      "PowerShell(\\(Get-Content \"D:\\\\energypac\\\\API_FLOW.md\" | Measure-Object -Line\\).Lines)",
+      "PowerShell(D:\\\\energypac\\\\venv\\\\Scripts\\\\python.exe D:\\\\energypac\\\\manage.py check --no-color)",
+      "PowerShell(D:\\\\energypac\\\\venv\\\\Scripts\\\\python.exe D:\\\\energypac\\\\manage.py makemigrations audit_logs --no-color)",
+      "PowerShell(D:\\\\energypac\\\\venv\\\\Scripts\\\\python.exe D:\\\\energypac\\\\manage.py migrate --no-color)",
+      "PowerShell(D:\\\\energypac\\\\venv\\\\Scripts\\\\python.exe D:\\\\energypac\\\\manage.py makemigrations billing --no-color)",
+      "PowerShell(D:\\\\energypac\\\\venv\\\\Scripts\\\\python.exe -c \"import os, django; os.environ['DJANGO_SETTINGS_MODULE']='erp_energypac.settings'; django.setup\\(\\); from accounts.models import User, UserModulePermission; admins = User.objects.filter\\(role='ADMIN'\\); [print\\(u.username, UserModulePermission.objects.get_or_create\\(user=u, module='TRANSPORT', defaults={'can_read': True, 'can_write': True}\\)[1]\\) for u in admins]\")"
     ]
   }
 }

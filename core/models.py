@@ -9,6 +9,24 @@ CURRENCY_CHOICES = [
 ]
 
 
+class Currency(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    code = models.CharField(max_length=5, unique=True, help_text="e.g., INR, USD, EUR")
+    name = models.CharField(max_length=100, help_text="e.g., Indian Rupee, US Dollar")
+    symbol = models.CharField(max_length=10, blank=True, help_text="e.g., ₹, $, €")
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'currencies'
+        ordering = ['code']
+        verbose_name_plural = 'Currencies'
+
+    def __str__(self):
+        return f"{self.code} - {self.name}"
+
+
 class ExchangeRate(models.Model):
     """
     Stores the admin-managed USD to INR exchange rate.

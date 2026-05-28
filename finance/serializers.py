@@ -1,8 +1,7 @@
 from rest_framework import serializers
-from .models import PurchasePayment, IncomingPayment
+from .models import PurchasePayment, PIPayment, AdvancePayment
 from purchase_orders.models import PurchaseOrder, PurchaseOrderItem
-from billing.models import Bill, BillItem
-from work_orders.models import WorkOrder
+from sales.models import ProformaInvoice
 from decimal import Decimal
 
 
@@ -30,35 +29,10 @@ class PurchasePaymentSerializer(serializers.ModelSerializer):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Incoming Payment Serializers (From clients)
-# ─────────────────────────────────────────────────────────────────────────────
-
-class IncomingPaymentSerializer(serializers.ModelSerializer):
-    recorded_by_name     = serializers.CharField(source='recorded_by.get_full_name', read_only=True)
-    payment_mode_display = serializers.CharField(source='get_payment_mode_display', read_only=True)
-    bill_number          = serializers.CharField(source='bill.bill_number', read_only=True)
-    client_name          = serializers.CharField(source='bill.client_name', read_only=True)
-    wo_number            = serializers.CharField(source='bill.work_order.wo_number', read_only=True)
-
-    class Meta:
-        model  = IncomingPayment
-        fields = [
-            'id', 'bill', 'bill_number', 'client_name', 'wo_number',
-            'payment_number', 'amount', 'payment_date',
-            'payment_mode', 'payment_mode_display', 'reference_number',
-            'remarks', 'payment_status',
-            'total_paid_after', 'balance_after',
-            'recorded_by', 'recorded_by_name', 'created_at',
-        ]
-        read_only_fields = fields
-
-
-# ─────────────────────────────────────────────────────────────────────────────
 # Purchase Order summary for finance views
 # ─────────────────────────────────────────────────────────────────────────────
 
 class POItemFinanceSerializer(serializers.ModelSerializer):
-    """Shows PO items with purchased status and price info."""
     product_name = serializers.CharField(source='product.item_name', read_only=True)
     product_code = serializers.CharField(source='product.item_code', read_only=True)
     hsn_code     = serializers.CharField(source='product.hsn_code',  read_only=True)
@@ -74,7 +48,6 @@ class POItemFinanceSerializer(serializers.ModelSerializer):
 
 
 class POFinanceSummarySerializer(serializers.ModelSerializer):
-    """Purchase Order summary for the finance/accounts section."""
     items              = POItemFinanceSerializer(many=True, read_only=True)
     vendor_name        = serializers.CharField(source='vendor.vendor_name', read_only=True)
     vendor_phone       = serializers.CharField(source='vendor.phone', read_only=True)
@@ -88,6 +61,8 @@ class POFinanceSummarySerializer(serializers.ModelSerializer):
     total_items_count     = serializers.SerializerMethodField()
 
     balance = serializers.SerializerMethodField()
+    total_amount_inr = serializers.SerializerMethodField()
+    is_overdue = serializers.SerializerMethodField()
 
     class Meta:
         model  = PurchaseOrder
@@ -95,30 +70,39 @@ class POFinanceSummarySerializer(serializers.ModelSerializer):
             'id', 'po_number', 'requisition', 'requisition_number',
             'vendor', 'vendor_name', 'vendor_phone', 'vendor_email', 'vendor_gst',
             'po_date', 'remarks',
-            'currency', 'exchange_rate',
-            'items_total', 'freight_cost', 'total_amount',
-            'original_items_total', 'original_freight_cost', 'original_total_amount',
+            'currency', 'conversion_rate', 'payment_due_date',
+            'items_total',
+            'cgst_percentage', 'sgst_percentage', 'igst_percentage',
+            'cgst_amount', 'sgst_amount', 'igst_amount',
+            'total_amount', 'total_amount_inr',
             'amount_paid', 'balance',
             'purchased_items_total', 'purchased_items_count', 'total_items_count',
-            'status', 'payment_count',
+            'status', 'payment_count', 'is_overdue',
             'created_by_name', 'items',
             'created_at', 'updated_at',
         ]
         read_only_fields = fields
 
     def get_balance(self, obj):
-        """Always compute from live values — never trust the stored balance field."""
         computed = obj.total_amount - obj.amount_paid
         return float(max(computed, Decimal('0')))
+
+    def get_total_amount_inr(self, obj):
+        if obj.currency == 'INR' or not obj.conversion_rate:
+            return float(obj.total_amount)
+        return float(obj.total_amount * obj.conversion_rate)
+
+    def get_is_overdue(self, obj):
+        if not obj.payment_due_date:
+            return False
+        from datetime import date
+        return date.today() > obj.payment_due_date and obj.amount_paid < obj.total_amount
 
     def get_payment_count(self, obj):
         return obj.purchase_payments.count()
 
     def get_purchased_items_total(self, obj):
-        """Total amount of only the items marked as received/purchased."""
-        return float(
-            sum(item.amount for item in obj.items.filter(is_received=True))
-        )
+        return float(sum(item.amount for item in obj.items.filter(is_received=True)))
 
     def get_purchased_items_count(self, obj):
         return obj.items.filter(is_received=True).count()
@@ -128,60 +112,93 @@ class POFinanceSummarySerializer(serializers.ModelSerializer):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Bill summary for finance views
+# PI Payment Serializer (Incoming from clients against Proforma Invoice)
 # ─────────────────────────────────────────────────────────────────────────────
 
-class BillItemFinanceSerializer(serializers.ModelSerializer):
+class PIPaymentSerializer(serializers.ModelSerializer):
+    recorded_by_name     = serializers.CharField(source='recorded_by.get_full_name', read_only=True)
+    payment_mode_display = serializers.CharField(source='get_payment_mode_display', read_only=True)
+    pi_number            = serializers.CharField(source='proforma_invoice.pi_number', read_only=True)
+
     class Meta:
-        model  = BillItem
+        model  = PIPayment
         fields = [
-            'id', 'item_code', 'item_name', 'hsn_code', 'unit',
-            'ordered_quantity', 'delivered_quantity', 'pending_quantity',
-            'rate', 'amount',
+            'id', 'proforma_invoice', 'pi_number',
+            'payment_number', 'amount', 'payment_date',
+            'payment_mode', 'payment_mode_display', 'reference_number',
+            'remarks', 'payment_status',
+            'total_paid_after', 'balance_after',
+            'recorded_by', 'recorded_by_name', 'created_at',
         ]
         read_only_fields = fields
 
 
-class BillFinanceSummarySerializer(serializers.ModelSerializer):
-    """Bill summary for the finance/accounts section."""
-    items           = BillItemFinanceSerializer(many=True, read_only=True)
-    wo_number       = serializers.CharField(source='work_order.wo_number', read_only=True)
-    created_by_name = serializers.CharField(source='created_by.get_full_name', read_only=True)
-    total_gst       = serializers.SerializerMethodField()
-    payment_count   = serializers.SerializerMethodField()
-
-    # FIX (Issue 3): always compute balance from net_payable - amount_paid
-    balance = serializers.SerializerMethodField()
+class PIFinanceSummarySerializer(serializers.ModelSerializer):
+    requisition_number = serializers.CharField(source='requisition.requisition_number', read_only=True)
+    created_by_name    = serializers.CharField(source='created_by.get_full_name', read_only=True)
+    payment_count      = serializers.SerializerMethodField()
+    balance            = serializers.SerializerMethodField()
+    grand_total_inr    = serializers.SerializerMethodField()
+    is_overdue         = serializers.SerializerMethodField()
 
     class Meta:
-        model  = Bill
+        model  = ProformaInvoice
         fields = [
-            'id', 'bill_number', 'bill_type',
-            'work_order', 'wo_number', 'bill_date',
-            'client_name', 'contact_person', 'phone', 'email', 'address',
-            'currency', 'exchange_rate',
-            'subtotal',
-            'cgst_percentage', 'sgst_percentage', 'igst_percentage',
-            'cgst_amount', 'sgst_amount', 'igst_amount', 'total_gst',
-            'total_amount', 'freight_cost',
-            'original_subtotal', 'original_cgst_amount', 'original_sgst_amount',
-            'original_igst_amount', 'original_total_amount',
-            'original_freight_cost', 'original_net_payable',
-            'advance_deducted', 'net_payable',
-            'amount_paid', 'balance',
-            'payment_count', 'status',
-            'created_by_name', 'items',
+            'id', 'pi_number', 'requisition', 'requisition_number',
+            'pi_date', 'currency', 'conversion_rate', 'payment_due_date',
+            'grand_total', 'grand_total_inr', 'amount_received', 'balance',
+            'status', 'payment_count', 'is_overdue',
+            'created_by_name',
             'created_at', 'updated_at',
         ]
         read_only_fields = fields
 
     def get_balance(self, obj):
-        """Always compute from live values — never trust the stored balance field."""
-        computed = obj.net_payable - obj.amount_paid
-        return float(max(computed, Decimal('0')))
+        return float(max(obj.grand_total - obj.amount_received, Decimal('0')))
 
-    def get_total_gst(self, obj):
-        return float(obj.cgst_amount + obj.sgst_amount + obj.igst_amount)
+    def get_grand_total_inr(self, obj):
+        if obj.currency == 'INR' or not obj.conversion_rate:
+            return float(obj.grand_total)
+        return float(obj.grand_total * obj.conversion_rate)
 
     def get_payment_count(self, obj):
-        return obj.incoming_payments.count()
+        return obj.pi_payments.count()
+
+    def get_is_overdue(self, obj):
+        if not obj.payment_due_date:
+            return False
+        from datetime import date
+        return date.today() > obj.payment_due_date and obj.amount_received < obj.grand_total
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Advance Payment Serializer
+# ─────────────────────────────────────────────────────────────────────────────
+
+class AdvancePaymentSerializer(serializers.ModelSerializer):
+    recorded_by_name     = serializers.CharField(source='recorded_by.get_full_name', read_only=True)
+    payment_mode_display = serializers.CharField(source='get_payment_mode_display', read_only=True)
+    pi_number            = serializers.CharField(source='proforma_invoice.pi_number', read_only=True)
+
+    class Meta:
+        model  = AdvancePayment
+        fields = [
+            'id', 'advance_number', 'client_name',
+            'proforma_invoice', 'pi_number',
+            'amount', 'currency', 'conversion_rate', 'amount_inr',
+            'amount_used', 'remaining',
+            'payment_date', 'payment_mode', 'payment_mode_display',
+            'reference_number', 'remarks', 'status',
+            'recorded_by', 'recorded_by_name', 'created_at',
+        ]
+        read_only_fields = [
+            'id', 'advance_number', 'currency', 'conversion_rate',
+            'amount_inr', 'remaining',
+            'recorded_by', 'created_at',
+        ]
+
+    def create(self, validated_data):
+        pi = validated_data['proforma_invoice']
+        validated_data['currency'] = pi.currency
+        validated_data['conversion_rate'] = pi.conversion_rate
+        return super().create(validated_data)

@@ -318,10 +318,8 @@ class VendorQuotationComparisonReportView(ReportsBaseView):
                         'product_code': item.product.item_code,
                         'product_name': item.product.item_name,
                         'quantity': float(item.quantity),
-                        'quoted_rate_inr': float(item.quoted_rate),
-                        'amount_inr': float(item.amount),
-                        'original_quoted_rate': float(item.original_quoted_rate),
-                        'original_amount': float(item.original_amount),
+                        'quoted_rate': float(item.quoted_rate),
+                        'amount': float(item.amount),
                     })
 
                 comparison_data.append({
@@ -330,19 +328,17 @@ class VendorQuotationComparisonReportView(ReportsBaseView):
                     'quotation_number': quote.quotation_number,
                     'quotation_date': quote.quotation_date.isoformat(),
                     'currency': quote.currency,
-                    'exchange_rate': float(quote.exchange_rate),
-                    'total_amount_inr': float(quote.total_amount),
-                    'original_total_amount': float(quote.original_total_amount),
+                    'total_amount': float(quote.total_amount),
                     'is_selected': quote.is_selected,
                     'items': items
                 })
 
-        # Comparison always in INR
         selected_quote = next((q for q in comparison_data if q['is_selected']), None)
         if selected_quote:
-            all_amounts = [q['total_amount_inr'] for q in comparison_data]
-            max_amount = max(all_amounts)
-            savings = max_amount - selected_quote['total_amount_inr']
+            same_currency = [q for q in comparison_data if q['currency'] == selected_quote['currency']]
+            all_amounts = [q['total_amount'] for q in same_currency]
+            max_amount = max(all_amounts) if all_amounts else 0
+            savings = max_amount - selected_quote['total_amount']
             savings_percentage = (savings / max_amount * 100) if max_amount > 0 else 0
         else:
             savings = 0
@@ -350,16 +346,16 @@ class VendorQuotationComparisonReportView(ReportsBaseView):
 
         return Response({
             'report_type': 'Vendor Quotation Comparison',
-            'comparison_currency': 'INR',
             'requisition_number': requisition.requisition_number,
             'requisition_date': requisition.requisition_date.isoformat(),
             'total_vendors': len(comparison_data),
+            'note': 'Comparison is only valid within the same currency',
             'quotations': comparison_data,
             'analysis': {
-                'lowest_quote': min(comparison_data, key=lambda x: x['total_amount_inr']) if comparison_data else None,
-                'highest_quote': max(comparison_data, key=lambda x: x['total_amount_inr']) if comparison_data else None,
+                'lowest_quote': min(comparison_data, key=lambda x: x['total_amount']) if comparison_data else None,
+                'highest_quote': max(comparison_data, key=lambda x: x['total_amount']) if comparison_data else None,
                 'selected_quote': selected_quote,
-                'savings_achieved_inr': float(savings),
+                'savings_achieved': float(savings),
                 'savings_percentage': round(savings_percentage, 2)
             },
             'generated_at': datetime.now().isoformat()

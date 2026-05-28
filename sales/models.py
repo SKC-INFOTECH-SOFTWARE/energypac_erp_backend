@@ -1,11 +1,137 @@
 from django.db import models
 from django.conf import settings
 from inventory.models import Product
-from core.models import CURRENCY_CHOICES, ExchangeRate
+from requisitions.models import Requisition, RequisitionItem
+from core.models import CURRENCY_CHOICES
 import uuid
 from decimal import Decimal
 from datetime import datetime
 
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Proforma Invoice
+# ═════════════════════════════════════════════════════════════════════════════
+
+class ProformaInvoice(models.Model):
+    STATUS_CHOICES = [
+        ('DRAFT', 'Draft'),
+        ('SENT', 'Sent'),
+        ('ACCEPTED', 'Accepted'),
+        ('CANCELLED', 'Cancelled'),
+    ]
+
+    id         = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    pi_number  = models.CharField(max_length=50, unique=True, editable=False)
+    requisition = models.ForeignKey(Requisition, on_delete=models.PROTECT, related_name='proforma_invoices')
+    pi_date    = models.DateField()
+    currency   = models.CharField(max_length=10, default='INR')
+
+    # ── Header fields (all optional) ─────────────────────────────────────
+    lc_number            = models.CharField(max_length=100, blank=True, default='')
+    exporter_beneficiary = models.TextField(blank=True, default='')
+    exporter_reference   = models.CharField(max_length=200, blank=True, default='')
+    gst_number           = models.CharField(max_length=50, blank=True, default='')
+    consignee            = models.TextField(blank=True, default='')
+    applicant_importer   = models.TextField(blank=True, default='')
+    pre_carriage_by      = models.CharField(max_length=200, blank=True, default='')
+    country_of_origin    = models.CharField(max_length=100, blank=True, default='')
+    final_destination    = models.CharField(max_length=200, blank=True, default='')
+    place_of_receipt     = models.CharField(max_length=200, blank=True, default='')
+    port_of_loading      = models.CharField(max_length=200, blank=True, default='')
+    port_of_discharge    = models.CharField(max_length=200, blank=True, default='')
+    terms_of_delivery    = models.CharField(max_length=200, blank=True, default='')
+    terms_of_payment     = models.CharField(max_length=200, blank=True, default='')
+
+    conversion_rate = models.DecimalField(
+        max_digits=10, decimal_places=4, null=True, blank=True,
+        help_text="INR conversion rate at PI creation (immutable record)"
+    )
+    payment_due_date = models.DateField(
+        null=True, blank=True,
+        help_text="Payment due date from client"
+    )
+
+    # ── Totals ────────────────────────────────────────────────────────────
+    grand_total = models.DecimalField(max_digits=12, decimal_places=2, default=0, help_text="Sum of all items")
+    amount_received = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    balance = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+
+    # ── T&C and Notes ─────────────────────────────────────────────────────
+    terms_and_conditions = models.JSONField(default=list, blank=True)
+    notes = models.TextField(blank=True, default='')
+
+    # ── Revision tracking ────────────────────────────────────────────────
+    revision_number = models.PositiveIntegerField(default=0)
+    is_revised      = models.BooleanField(default=False)
+
+    # ── Edit locking ─────────────────────────────────────────────────────
+    locked_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='locked_proforma_invoices',
+    )
+    locked_at = models.DateTimeField(null=True, blank=True)
+
+    status     = models.CharField(max_length=20, choices=STATUS_CHOICES, default='DRAFT')
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name='proforma_invoices_created')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'proforma_invoices'
+        ordering = ['-pi_number']
+
+    def save(self, *args, **kwargs):
+        if not self.pi_number:
+            year = datetime.now().year
+            prefix = f'EEL/IND/PI/{year}'
+            last_pi = ProformaInvoice.objects.filter(
+                pi_number__startswith=prefix + '/'
+            ).order_by('-created_at').first()
+
+            if last_pi:
+                num_part = last_pi.pi_number.split('/')[-1]
+                num_part = num_part.rstrip('R')
+                new_num = int(num_part) + 1
+            else:
+                new_num = 1
+
+            self.pi_number = f'{prefix}/{new_num:04d}'
+
+        super().save(*args, **kwargs)
+
+    def calculate_total(self):
+        self.grand_total = sum(item.amount for item in self.items.all())
+        self.balance = self.grand_total - self.amount_received
+        self.save()
+
+    def __str__(self):
+        return self.pi_number
+
+
+class ProformaInvoiceItem(models.Model):
+    id                = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    proforma_invoice  = models.ForeignKey(ProformaInvoice, on_delete=models.CASCADE, related_name='items')
+    requisition_item  = models.ForeignKey(RequisitionItem, on_delete=models.PROTECT, null=True, blank=True)
+    product           = models.ForeignKey(Product, on_delete=models.PROTECT)
+    hsn_code          = models.CharField(max_length=50, blank=True, default='')
+    quantity          = models.DecimalField(max_digits=10, decimal_places=2)
+    unit_price        = models.DecimalField(max_digits=10, decimal_places=2)
+    amount            = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+
+    class Meta:
+        db_table = 'proforma_invoice_items'
+
+    def save(self, *args, **kwargs):
+        self.amount = Decimal(str(self.quantity)) * Decimal(str(self.unit_price))
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.proforma_invoice.pi_number} - {self.product.item_name}"
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Client Query & Sales Quotation (existing)
+# ═════════════════════════════════════════════════════════════════════════════
 
 class ClientQuery(models.Model):
     """Client Query/Inquiry - Customer requests"""
@@ -108,10 +234,6 @@ class SalesQuotation(models.Model):
         max_length=3, choices=CURRENCY_CHOICES, default='INR',
         help_text="Currency for this quotation"
     )
-    exchange_rate = models.DecimalField(
-        max_digits=10, decimal_places=4, default=1,
-        help_text="USD to INR rate at time of quotation (1 if INR)"
-    )
 
     # Tax configuration
     cgst_percentage = models.DecimalField(
@@ -148,19 +270,6 @@ class SalesQuotation(models.Model):
         decimal_places=2,
         default=0,
         help_text="Subtotal + all taxes (INR)"
-    )
-
-    # ── Original currency amounts ────────────────────────────────────────
-    original_subtotal = models.DecimalField(
-        max_digits=12, decimal_places=2, default=0,
-        help_text="Subtotal in original currency"
-    )
-    original_cgst_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
-    original_sgst_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
-    original_igst_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
-    original_total_amount = models.DecimalField(
-        max_digits=12, decimal_places=2, default=0,
-        help_text="Total in original currency"
     )
 
     status = models.CharField(
@@ -200,7 +309,7 @@ class SalesQuotation(models.Model):
         super().save(*args, **kwargs)
 
     def calculate_totals(self):
-        """Calculate all amounts based on items. INR fields are always authoritative."""
+        """Calculate all amounts based on items in the quotation's currency."""
         self.subtotal = sum(item.amount for item in self.items.all())
 
         self.cgst_amount = (self.subtotal * self.cgst_percentage) / 100
@@ -213,25 +322,6 @@ class SalesQuotation(models.Model):
             self.sgst_amount +
             self.igst_amount
         )
-
-        if self.currency == 'USD' and self.exchange_rate:
-            rate = self.exchange_rate
-            self.original_subtotal = sum(item.original_amount for item in self.items.all())
-            self.original_cgst_amount = (self.original_subtotal * self.cgst_percentage) / 100
-            self.original_sgst_amount = (self.original_subtotal * self.sgst_percentage) / 100
-            self.original_igst_amount = (self.original_subtotal * self.igst_percentage) / 100
-            self.original_total_amount = (
-                self.original_subtotal +
-                self.original_cgst_amount +
-                self.original_sgst_amount +
-                self.original_igst_amount
-            )
-        else:
-            self.original_subtotal = self.subtotal
-            self.original_cgst_amount = self.cgst_amount
-            self.original_sgst_amount = self.sgst_amount
-            self.original_igst_amount = self.igst_amount
-            self.original_total_amount = self.total_amount
 
         self.save()
 
@@ -275,22 +365,12 @@ class SalesQuotationItem(models.Model):
     rate = models.DecimalField(
         max_digits=10,
         decimal_places=2,
-        help_text="Rate per unit (INR)"
+        help_text="Rate per unit"
     )
     amount = models.DecimalField(
         max_digits=12,
         decimal_places=2,
-        help_text="quantity × rate (INR)"
-    )
-
-    # ── Original currency amounts ────────────────────────────────────────
-    original_rate = models.DecimalField(
-        max_digits=10, decimal_places=2, default=0,
-        help_text="Rate in original currency (same as rate if INR)"
-    )
-    original_amount = models.DecimalField(
-        max_digits=12, decimal_places=2, default=0,
-        help_text="Amount in original currency (same as amount if INR)"
+        help_text="quantity × rate"
     )
 
     remarks = models.TextField(blank=True)
@@ -309,21 +389,7 @@ class SalesQuotationItem(models.Model):
             if not self.description:
                 self.description = self.product.description
 
-        currency = self.quotation.currency
-        ex_rate = Decimal(str(self.quotation.exchange_rate))
-        quantity = Decimal(str(self.quantity))
-        rate = Decimal(str(self.rate))
-
-        if currency == 'USD':
-            orig_rate = Decimal(str(self.original_rate)) if self.original_rate else rate
-            self.original_rate = orig_rate
-            self.original_amount = quantity * orig_rate
-            self.rate = orig_rate * ex_rate
-            self.amount = quantity * Decimal(str(self.rate))
-        else:
-            self.amount = quantity * rate
-            self.original_rate = rate
-            self.original_amount = self.amount
+        self.amount = Decimal(str(self.quantity)) * Decimal(str(self.rate))
 
         super().save(*args, **kwargs)
 

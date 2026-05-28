@@ -40,6 +40,8 @@ INSTALLED_APPS = [
     'billing',
     'core',
     'finance',
+    'audit_logs',
+    'transport',
 ]
 
 MIDDLEWARE = [

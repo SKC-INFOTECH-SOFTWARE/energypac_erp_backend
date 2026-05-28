@@ -24,6 +24,11 @@ class PurchaseOrder(models.Model):
     requisition  = models.ForeignKey(Requisition, on_delete=models.PROTECT)
     vendor       = models.ForeignKey(Vendor, on_delete=models.PROTECT)
     po_date      = models.DateField()
+    subject      = models.CharField(max_length=255, blank=True, default='')
+    project_name = models.CharField(max_length=255, blank=True, default='')
+    bill_to      = models.TextField(blank=True, default='')
+    ship_to      = models.TextField(blank=True, default='')
+    terms_and_conditions = models.JSONField(default=list, blank=True, help_text="Array of terms & conditions")
     remarks      = models.TextField(blank=True)
 
     # ── Currency ──────────────────────────────────────────────────────────────
@@ -31,37 +36,38 @@ class PurchaseOrder(models.Model):
         max_length=3, choices=CURRENCY_CHOICES, default='INR',
         help_text="Currency inherited from vendor quotation"
     )
-    exchange_rate = models.DecimalField(
-        max_digits=10, decimal_places=4, default=1,
-        help_text="USD to INR rate at time of PO (1 if INR)"
+    conversion_rate = models.DecimalField(
+        max_digits=10, decimal_places=4, null=True, blank=True,
+        help_text="INR conversion rate at the time of PO creation (for record only, no conversion applied)"
     )
 
-    # ── Amounts (always INR) ─────────────────────────────────────────────────
+    # ── Amounts (in the PO's stated currency) ────────────────────────────────
     items_total  = models.DecimalField(
         max_digits=12, decimal_places=2, default=0,
         help_text="Sum of all line-item amounts (qty × rate)"
     )
-    freight_cost = models.DecimalField(
+
+    # ── GST ───────────────────────────────────────────────────────────────────
+    cgst_percentage = models.DecimalField(max_digits=5, decimal_places=2, default=0)
+    sgst_percentage = models.DecimalField(max_digits=5, decimal_places=2, default=0)
+    igst_percentage = models.DecimalField(max_digits=5, decimal_places=2, default=0)
+    cgst_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    sgst_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    igst_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+
+    discount_amount = models.DecimalField(
         max_digits=12, decimal_places=2, default=0,
-        help_text="Freight / shipping cost added on top of item total"
-    )
-    total_amount = models.DecimalField(
-        max_digits=12, decimal_places=2, default=0,
-        help_text="items_total + freight_cost"
+        help_text="Vendor discount amount (in PO currency), subtracted from total"
     )
 
-    # ── Original currency amounts ────────────────────────────────────────────
-    original_items_total = models.DecimalField(
+    total_amount = models.DecimalField(
         max_digits=12, decimal_places=2, default=0,
-        help_text="Items total in original currency"
+        help_text="items_total + GST - discount"
     )
-    original_freight_cost = models.DecimalField(
-        max_digits=12, decimal_places=2, default=0,
-        help_text="Freight cost in original currency"
-    )
-    original_total_amount = models.DecimalField(
-        max_digits=12, decimal_places=2, default=0,
-        help_text="Total in original currency"
+
+    payment_due_date = models.DateField(
+        null=True, blank=True,
+        help_text="Payment due date to vendor"
     )
 
     # ── Payment tracking ──────────────────────────────────────────────────────
@@ -72,6 +78,24 @@ class PurchaseOrder(models.Model):
     balance = models.DecimalField(
         max_digits=12, decimal_places=2, default=0,
         help_text="Remaining balance (total_amount - amount_paid, INR)"
+    )
+
+    # ── Revision tracking ────────────────────────────────────────────────────
+    revision_number = models.PositiveIntegerField(
+        default=0,
+        help_text="Incremented on each edit; 0 = original"
+    )
+    is_revised = models.BooleanField(default=False)
+
+    # ── Edit locking ─────────────────────────────────────────────────────────
+    locked_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='locked_purchase_orders',
+        help_text="User currently editing this PO"
+    )
+    locked_at = models.DateTimeField(
+        null=True, blank=True,
+        help_text="Timestamp when PO was locked for editing"
     )
 
     status       = models.CharField(max_length=20, choices=STATUS_CHOICES, default='PENDING')
@@ -102,36 +126,42 @@ class PurchaseOrder(models.Model):
 
     def save(self, *args, **kwargs):
         if not self.po_number:
-            year    = datetime.now().year
-            last_po = PurchaseOrder.objects.filter(
-                po_number__startswith=f'PO/{year}/'
-            ).order_by('-po_number').first()
+            import re
+            vendor_name = self.vendor.vendor_name.strip()
+            vendor_prefix = re.split(r'\s+', vendor_name)[0].upper()
+            prefix = f'EEL/IND/{vendor_prefix}'
 
-            new_num        = int(last_po.po_number.split('/')[-1]) + 1 if last_po else 1
-            self.po_number = f'PO/{year}/{new_num:04d}'
+            last_po = PurchaseOrder.objects.filter(
+                po_number__startswith=prefix + '/'
+            ).order_by('-created_at').first()
+
+            if last_po:
+                num_part = last_po.po_number.split('/')[-1]
+                num_part = num_part.rstrip('R')
+                new_num = int(num_part) + 1
+            else:
+                new_num = 100
+
+            self.po_number = f'{prefix}/{new_num}'
 
         super().save(*args, **kwargs)
 
     def calculate_total(self):
-        """Recalculate items_total, total_amount, and balance."""
-        self.items_total  = sum(item.amount for item in self.items.all())
-        self.total_amount = self.items_total + self.freight_cost
-        self.balance      = self.total_amount - self.amount_paid
+        """Recalculate items_total, GST, total_amount, and balance."""
+        self.items_total = sum(item.amount for item in self.items.all())
 
-        if self.currency == 'USD' and self.exchange_rate:
-            self.original_items_total = sum(
-                item.original_amount for item in self.items.all()
-            )
-            ex_rate = Decimal(str(self.exchange_rate))
-            self.original_freight_cost = self.original_freight_cost or (
-                Decimal(str(self.freight_cost)) / ex_rate if ex_rate else self.freight_cost
-            )
-            self.original_total_amount = self.original_items_total + self.original_freight_cost
-        else:
-            self.original_items_total = self.items_total
-            self.original_freight_cost = self.freight_cost
-            self.original_total_amount = self.total_amount
+        self.cgst_amount = (self.items_total * self.cgst_percentage) / Decimal('100')
+        self.sgst_amount = (self.items_total * self.sgst_percentage) / Decimal('100')
+        self.igst_amount = (self.items_total * self.igst_percentage) / Decimal('100')
 
+        self.total_amount = (
+            self.items_total
+            + self.cgst_amount
+            + self.sgst_amount
+            + self.igst_amount
+            - self.discount_amount
+        )
+        self.balance = self.total_amount - self.amount_paid
         self.save()
 
     def update_status(self):
@@ -183,6 +213,7 @@ class PurchaseOrder(models.Model):
         for item in self.items.all():
             if item.is_received:
                 item.product.current_stock -= item.quantity
+                item.product.purchase_count = max(item.product.purchase_count - 1, 0)
                 item.product.save()
 
                 item.is_received = False
@@ -212,21 +243,11 @@ class PurchaseOrderItem(models.Model):
 
     id             = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     po             = models.ForeignKey(PurchaseOrder, on_delete=models.CASCADE, related_name='items')
-    quotation_item = models.ForeignKey(VendorQuotationItem, on_delete=models.PROTECT)
+    quotation_item = models.ForeignKey(VendorQuotationItem, on_delete=models.PROTECT, null=True, blank=True)
     product        = models.ForeignKey(Product, on_delete=models.PROTECT)
     quantity       = models.DecimalField(max_digits=10, decimal_places=2)
-    rate           = models.DecimalField(max_digits=10, decimal_places=2, help_text="Rate in INR")
-    amount         = models.DecimalField(max_digits=12, decimal_places=2, help_text="Amount in INR")
-
-    # ── Original currency amounts ────────────────────────────────────────
-    original_rate   = models.DecimalField(
-        max_digits=10, decimal_places=2, default=0,
-        help_text="Rate in original currency"
-    )
-    original_amount = models.DecimalField(
-        max_digits=12, decimal_places=2, default=0,
-        help_text="Amount in original currency"
-    )
+    rate           = models.DecimalField(max_digits=10, decimal_places=2, help_text="Rate per unit")
+    amount         = models.DecimalField(max_digits=12, decimal_places=2, help_text="quantity × rate")
 
     is_received    = models.BooleanField(default=False)
 
@@ -235,21 +256,7 @@ class PurchaseOrderItem(models.Model):
 
     def save(self, *args, **kwargs):
         from decimal import Decimal
-
-        quantity = Decimal(str(self.quantity))
-        rate = Decimal(str(self.rate))
-        self.amount = quantity * rate
-
-        currency = self.po.currency
-        if currency == 'USD' and self.po.exchange_rate:
-            ex_rate = Decimal(str(self.po.exchange_rate))
-            orig_rate = Decimal(str(self.original_rate)) if self.original_rate else (rate / ex_rate)
-            self.original_rate = orig_rate
-            self.original_amount = quantity * Decimal(str(self.original_rate))
-        else:
-            self.original_rate = rate
-            self.original_amount = self.amount
-
+        self.amount = Decimal(str(self.quantity)) * Decimal(str(self.rate))
         super().save(*args, **kwargs)
 
     def mark_as_purchased(self):
@@ -265,6 +272,7 @@ class PurchaseOrderItem(models.Model):
 
         if not self.is_received:
             self.product.current_stock += self.quantity
+            self.product.purchase_count += 1
             self.product.save()
 
             self.is_received = True

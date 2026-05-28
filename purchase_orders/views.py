@@ -2,35 +2,29 @@ from rest_framework import viewsets, status, filters
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from django_filters.rest_framework import DjangoFilterBackend
+from django.utils import timezone
+from datetime import timedelta
 
 from .models import PurchaseOrder, PurchaseOrderItem
-from .serializers import PurchaseOrderSerializer, GeneratePOSerializer
+from .serializers import PurchaseOrderSerializer, PurchaseOrderUpdateSerializer, GeneratePOSerializer
 from core.password_confirm import check_password_confirmation
 from core.permissions import PurchaseModulePermission
+from audit_logs.models import AuditLog
+
+LOCK_TIMEOUT_MINUTES = 30
 
 
 class PurchaseOrderViewSet(viewsets.ModelViewSet):
     permission_classes = [PurchaseModulePermission]
-    """
-    Purchase Order APIs
-
-    Endpoints
-    ---------
-    Standard CRUD:
-        GET    /api/purchase-orders                  – list all POs
-        GET    /api/purchase-orders/{id}             – retrieve PO
-        PATCH  /api/purchase-orders/{id}             – partial update
-
-    Custom actions (⚠ marked ones require confirm_password in body):
-        POST   /api/purchase-orders/generate_from_comparison   – create PO from selections
-        POST   /api/purchase-orders/{id}/mark_item_purchased   – receive one item into stock
-        POST   /api/purchase-orders/{id}/mark_all_purchased    – receive all items into stock
-        POST   /api/purchase-orders/{id}/cancel                ⚠ requires confirm_password
-    """
     queryset = PurchaseOrder.objects.all().select_related(
-        'requisition', 'vendor', 'created_by', 'cancelled_by'
+        'requisition', 'vendor', 'created_by', 'cancelled_by', 'locked_by'
     ).prefetch_related('items__product')
     serializer_class = PurchaseOrderSerializer
+
+    def get_serializer_class(self):
+        if self.action in ('update', 'partial_update'):
+            return PurchaseOrderUpdateSerializer
+        return PurchaseOrderSerializer
     filter_backends  = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     filterset_fields = ['requisition', 'vendor', 'status']
     search_fields    = ['po_number', 'vendor__vendor_name']
@@ -55,6 +49,14 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
         serializer = GeneratePOSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         pos = serializer.save(created_by=request.user)
+
+        for po in pos:
+            AuditLog.log(request.user, 'CREATE', po, {
+                'po_number': po.po_number,
+                'vendor': po.vendor.vendor_name,
+                'total_amount': str(po.total_amount),
+                'currency': po.currency,
+            })
 
         return Response(
             {
@@ -181,6 +183,12 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
         except ValueError as e:
             return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
+        AuditLog.log(request.user, 'UPDATE', po, {
+            'action': 'CANCEL',
+            'reason': po.cancellation_reason,
+            'stock_reversed': reversed_items,
+        })
+
         serializer = self.get_serializer(po)
         return Response({
             'message':        'Purchase order cancelled successfully',
@@ -192,3 +200,117 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
             'stock_reversed': reversed_items,
             'purchase_order': serializer.data,
         })
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # Edit locking
+    # ──────────────────────────────────────────────────────────────────────────
+
+    @action(detail=True, methods=['post'])
+    def lock(self, request, pk=None):
+        """Acquire edit lock on a PO."""
+        po = self.get_object()
+
+        if po.locked_by and po.locked_by != request.user:
+            if po.locked_at and (timezone.now() - po.locked_at) < timedelta(minutes=LOCK_TIMEOUT_MINUTES):
+                return Response(
+                    {
+                        'error': 'PO is currently being edited by another user',
+                        'locked_by': po.locked_by.get_full_name(),
+                        'locked_at': po.locked_at.isoformat(),
+                    },
+                    status=status.HTTP_409_CONFLICT,
+                )
+
+        PurchaseOrder.objects.filter(pk=po.pk).update(
+            locked_by=request.user,
+            locked_at=timezone.now(),
+        )
+        po.refresh_from_db()
+        return Response({
+            'message': 'PO locked for editing',
+            'po_number': po.po_number,
+            'locked_by': request.user.get_full_name(),
+            'locked_at': po.locked_at.isoformat(),
+        })
+
+    @action(detail=True, methods=['post'])
+    def unlock(self, request, pk=None):
+        """Release edit lock on a PO."""
+        po = self.get_object()
+
+        if po.locked_by and po.locked_by != request.user and request.user.role != 'ADMIN':
+            return Response(
+                {'error': 'Only the lock holder or an admin can unlock'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        PurchaseOrder.objects.filter(pk=po.pk).update(
+            locked_by=None,
+            locked_at=None,
+        )
+        return Response({'message': 'PO unlocked', 'po_number': po.po_number})
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # PO Edit with revision tracking
+    # ──────────────────────────────────────────────────────────────────────────
+
+    def perform_update(self, serializer):
+        po = serializer.instance
+
+        if po.locked_by and po.locked_by != self.request.user:
+            if po.locked_at and (timezone.now() - po.locked_at) < timedelta(minutes=LOCK_TIMEOUT_MINUTES):
+                from rest_framework.exceptions import PermissionDenied
+                raise PermissionDenied(
+                    f'PO is locked for editing by {po.locked_by.get_full_name()}'
+                )
+
+        old_values = {
+            'po_number': po.po_number,
+            'remarks': po.remarks,
+            'revision_number': po.revision_number,
+            'items_total': str(po.items_total),
+            'discount_amount': str(po.discount_amount),
+            'total_amount': str(po.total_amount),
+        }
+
+        po.revision_number += 1
+        po.is_revised = True
+        if not po.po_number.endswith('R'):
+            po.po_number = po.po_number + 'R'
+
+        serializer.save()
+        po.refresh_from_db()
+
+        AuditLog.log(self.request.user, 'UPDATE', po, {
+            'old': old_values,
+            'new': {
+                'po_number': po.po_number,
+                'remarks': po.remarks,
+                'revision_number': po.revision_number,
+                'items_total': str(po.items_total),
+                'discount_amount': str(po.discount_amount),
+                'total_amount': str(po.total_amount),
+            },
+        })
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # Update GST on PO
+    # ──────────────────────────────────────────────────────────────────────────
+
+    @action(detail=True, methods=['post'])
+    def update_gst(self, request, pk=None):
+        """Update GST percentages and recalculate totals."""
+        po = self.get_object()
+        cgst = request.data.get('cgst_percentage')
+        sgst = request.data.get('sgst_percentage')
+        igst = request.data.get('igst_percentage')
+
+        if cgst is not None:
+            po.cgst_percentage = cgst
+        if sgst is not None:
+            po.sgst_percentage = sgst
+        if igst is not None:
+            po.igst_percentage = igst
+        po.save()
+        po.calculate_total()
+        return Response(PurchaseOrderSerializer(po).data)

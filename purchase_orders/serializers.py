@@ -1,6 +1,8 @@
 from rest_framework import serializers
+from django.db import transaction
 from .models import PurchaseOrder, PurchaseOrderItem
 from requisitions.models import Requisition, VendorQuotationItem
+from inventory.models import Product
 from vendors.models import Vendor
 from collections import defaultdict
 from decimal import Decimal
@@ -23,10 +25,9 @@ class PurchaseOrderItemSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'product', 'product_name', 'product_code', 'hsn_code',
             'unit', 'quantity', 'rate', 'amount',
-            'original_rate', 'original_amount',
             'is_received',
         ]
-        read_only_fields = ['id', 'amount', 'original_rate', 'original_amount']
+        read_only_fields = ['id', 'amount']
 
 
 class PurchaseOrderSerializer(serializers.ModelSerializer):
@@ -36,17 +37,24 @@ class PurchaseOrderSerializer(serializers.ModelSerializer):
     requisition_number   = serializers.CharField(source='requisition.requisition_number', read_only=True)
     created_by_name      = serializers.CharField(source='created_by.get_full_name',       read_only=True)
     cancelled_by_name    = serializers.SerializerMethodField()
+    locked_by_name       = serializers.SerializerMethodField()
 
     class Meta:
         model  = PurchaseOrder
         fields = [
             'id', 'po_number', 'requisition', 'requisition_number',
             'vendor', 'vendor_name', 'vendor_details',
-            'po_date', 'remarks',
-            'currency', 'exchange_rate',
-            'items_total', 'freight_cost', 'total_amount',
-            'original_items_total', 'original_freight_cost', 'original_total_amount',
+            'po_date', 'subject', 'project_name', 'bill_to', 'ship_to',
+            'terms_and_conditions', 'remarks',
+            'currency', 'conversion_rate', 'payment_due_date',
+            'items_total',
+            'discount_amount',
+            'cgst_percentage', 'sgst_percentage', 'igst_percentage',
+            'cgst_amount', 'sgst_amount', 'igst_amount',
+            'total_amount',
             'amount_paid', 'balance',
+            'revision_number', 'is_revised',
+            'locked_by', 'locked_by_name', 'locked_at',
             'status',
             'cancellation_reason', 'cancelled_by', 'cancelled_by_name', 'cancelled_at',
             'created_by_name', 'items',
@@ -54,9 +62,11 @@ class PurchaseOrderSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = [
             'id', 'po_number', 'items_total', 'total_amount',
-            'currency', 'exchange_rate',
-            'original_items_total', 'original_freight_cost', 'original_total_amount',
+            'currency', 'conversion_rate',
+            'cgst_amount', 'sgst_amount', 'igst_amount',
             'amount_paid', 'balance',
+            'revision_number', 'is_revised',
+            'locked_by', 'locked_at',
             'cancellation_reason', 'cancelled_by', 'cancelled_at',
             'created_at', 'updated_at',
         ]
@@ -66,42 +76,130 @@ class PurchaseOrderSerializer(serializers.ModelSerializer):
             return obj.cancelled_by.get_full_name()
         return None
 
+    def get_locked_by_name(self, obj):
+        if obj.locked_by:
+            return obj.locked_by.get_full_name()
+        return None
 
-class FreightCostItemSerializer(serializers.Serializer):
-    vendor_id    = serializers.UUIDField()
-    freight_cost = serializers.DecimalField(max_digits=12, decimal_places=2)
 
+# ─────────────────────────────────────────────────────────────────────────────
+# PO Update Serializer — full edit (items, rates, quantities, GST, etc.)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class POItemUpdateSerializer(serializers.Serializer):
+    id       = serializers.UUIDField(required=False, allow_null=True)
+    product  = serializers.UUIDField()
+    quantity = serializers.DecimalField(max_digits=10, decimal_places=2)
+    rate     = serializers.DecimalField(max_digits=10, decimal_places=2)
+    remarks  = serializers.CharField(required=False, allow_blank=True, default='')
+
+
+class PurchaseOrderUpdateSerializer(serializers.ModelSerializer):
+    items = POItemUpdateSerializer(many=True, required=False)
+
+    class Meta:
+        model  = PurchaseOrder
+        fields = [
+            'po_date', 'subject', 'project_name', 'bill_to', 'ship_to',
+            'terms_and_conditions', 'remarks', 'payment_due_date',
+            'discount_amount',
+            'cgst_percentage', 'sgst_percentage', 'igst_percentage',
+            'items',
+        ]
+
+    def update(self, instance, validated_data):
+        items_data = validated_data.pop('items', None)
+
+        with transaction.atomic():
+            for attr, value in validated_data.items():
+                setattr(instance, attr, value)
+            instance.save()
+
+            if items_data is not None:
+                existing_items = {str(item.id): item for item in instance.items.all()}
+                submitted_ids = set()
+
+                for item_data in items_data:
+                    item_id = item_data.get('id')
+                    product = Product.objects.get(id=item_data['product'])
+
+                    if item_id and str(item_id) in existing_items:
+                        item = existing_items[str(item_id)]
+                        if item.is_received:
+                            raise serializers.ValidationError(
+                                f'Cannot edit item "{product.item_name}" — already received.'
+                            )
+                        item.product = product
+                        item.quantity = item_data['quantity']
+                        item.rate = item_data['rate']
+                        item.save()
+                        submitted_ids.add(str(item_id))
+                    else:
+                        new_item = PurchaseOrderItem.objects.create(
+                            po=instance,
+                            quotation_item=instance.items.first().quotation_item if instance.items.exists() else None,
+                            product=product,
+                            quantity=item_data['quantity'],
+                            rate=item_data['rate'],
+                        )
+                        submitted_ids.add(str(new_item.id))
+
+                for item_id, item in existing_items.items():
+                    if item_id not in submitted_ids:
+                        if item.is_received:
+                            raise serializers.ValidationError(
+                                f'Cannot remove item "{item.product.item_name}" — already received.'
+                            )
+                        item.delete()
+
+            instance.calculate_total()
+
+        return instance
+
+    def to_representation(self, instance):
+        return PurchaseOrderSerializer(instance).data
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Generate PO from comparison
+# ─────────────────────────────────────────────────────────────────────────────
 
 class GeneratePOSerializer(serializers.Serializer):
     """
     Generate PO from comparison selections.
     User selects quotation_item IDs from comparison.
-
-    Fields
-    ------
-    freight_costs : Optional list of {vendor_id, freight_cost} objects.
-                    Each entry sets the freight cost for that vendor's PO.
-                    Vendors not listed default to 0.
-    freight_cost  : Optional flat freight charge (INR). If provided and
-                    freight_costs is not, this value is applied to ALL POs.
+    Separate PO per vendor. GST applied on total selected amount.
     """
-    requisition   = serializers.UUIDField()
-    selections    = serializers.ListField(
+    requisition      = serializers.UUIDField()
+    selections       = serializers.ListField(
         child=serializers.UUIDField(),
         help_text="List of quotation_item IDs"
     )
-    po_date       = serializers.DateField()
-    freight_costs = FreightCostItemSerializer(
-        many=True, required=False, default=[],
-        help_text="Per-vendor freight costs: [{vendor_id, freight_cost}, ...]"
+    po_date          = serializers.DateField()
+    subject          = serializers.CharField(required=False, allow_blank=True, default='')
+    project_name     = serializers.CharField(required=False, allow_blank=True, default='')
+    bill_to          = serializers.CharField(required=False, allow_blank=True, default='')
+    ship_to          = serializers.CharField(required=False, allow_blank=True, default='')
+    terms_and_conditions = serializers.ListField(child=serializers.JSONField(), required=False, default=list)
+    cgst_percentage  = serializers.DecimalField(
+        max_digits=5, decimal_places=2, default=Decimal('0'), required=False
     )
-    freight_cost  = serializers.DecimalField(
-        max_digits=12, decimal_places=2,
-        default=Decimal('0'),
-        required=False,
-        help_text="Flat freight cost applied to all POs (fallback if freight_costs not provided)."
+    sgst_percentage  = serializers.DecimalField(
+        max_digits=5, decimal_places=2, default=Decimal('0'), required=False
+    )
+    igst_percentage  = serializers.DecimalField(
+        max_digits=5, decimal_places=2, default=Decimal('0'), required=False
     )
     remarks = serializers.CharField(required=False, allow_blank=True)
+    discount_amount = serializers.DecimalField(
+        max_digits=12, decimal_places=2, default=Decimal('0'), required=False,
+        help_text="Vendor discount in PO currency (subtracted from total). Default 0."
+    )
+    conversion_rate = serializers.DecimalField(
+        max_digits=10, decimal_places=4, required=False, allow_null=True, default=None,
+        help_text="Current INR conversion rate (for record only, no conversion applied). Required for non-INR POs."
+    )
+    payment_due_date = serializers.DateField(required=False, allow_null=True, default=None)
 
     def validate_requisition(self, value):
         try:
@@ -123,18 +221,9 @@ class GeneratePOSerializer(serializers.Serializer):
         return value
 
     def create(self, validated_data):
-        selections       = validated_data['selections']
-        requisition      = Requisition.objects.get(id=validated_data['requisition'])
-        flat_freight_cost = validated_data.get('freight_cost', Decimal('0'))
+        selections  = validated_data['selections']
+        requisition = Requisition.objects.get(id=validated_data['requisition'])
 
-        # Build per-vendor freight cost lookup from the freight_costs array
-        freight_costs_list = validated_data.get('freight_costs', [])
-        vendor_freight_map = {
-            str(entry['vendor_id']): entry['freight_cost']
-            for entry in freight_costs_list
-        }
-
-        # Group by vendor
         vendor_groups = defaultdict(list)
         for item_id in selections:
             q_item = VendorQuotationItem.objects.select_related(
@@ -143,29 +232,31 @@ class GeneratePOSerializer(serializers.Serializer):
             vendor = q_item.quotation.assignment.vendor
             vendor_groups[vendor.id].append(q_item)
 
-        # Create one PO per vendor
         pos = []
         for vendor_id, items in vendor_groups.items():
             vendor = Vendor.objects.get(id=vendor_id)
 
-            # Use per-vendor freight cost if available, otherwise fall back to flat value
-            vendor_freight = vendor_freight_map.get(str(vendor_id), flat_freight_cost)
-
-            # Inherit currency from vendor quotation
             first_item = items[0]
-            quotation = first_item.quotation
-            currency = quotation.currency
-            exchange_rate = quotation.exchange_rate
+            currency = first_item.quotation.currency
 
             po = PurchaseOrder.objects.create(
-                requisition   = requisition,
-                vendor        = vendor,
-                po_date       = validated_data['po_date'],
-                currency      = currency,
-                exchange_rate = exchange_rate,
-                freight_cost  = vendor_freight,
-                remarks       = validated_data.get('remarks', ''),
-                created_by    = validated_data['created_by']
+                requisition      = requisition,
+                vendor           = vendor,
+                po_date          = validated_data['po_date'],
+                subject          = validated_data.get('subject', ''),
+                project_name     = validated_data.get('project_name', ''),
+                bill_to          = validated_data.get('bill_to', ''),
+                ship_to          = validated_data.get('ship_to', ''),
+                terms_and_conditions = validated_data.get('terms_and_conditions', []),
+                currency         = currency,
+                conversion_rate  = validated_data.get('conversion_rate'),
+                payment_due_date = validated_data.get('payment_due_date'),
+                discount_amount  = validated_data.get('discount_amount', Decimal('0')),
+                cgst_percentage  = validated_data.get('cgst_percentage', Decimal('0')),
+                sgst_percentage  = validated_data.get('sgst_percentage', Decimal('0')),
+                igst_percentage  = validated_data.get('igst_percentage', Decimal('0')),
+                remarks          = validated_data.get('remarks', ''),
+                created_by       = validated_data['created_by']
             )
 
             for q_item in items:
@@ -175,10 +266,8 @@ class GeneratePOSerializer(serializers.Serializer):
                     product        = q_item.product,
                     quantity       = q_item.quantity,
                     rate           = q_item.quoted_rate,
-                    original_rate  = q_item.original_quoted_rate,
                 )
 
-            # calculate_total() computes items_total + freight_cost = total_amount
             po.calculate_total()
             pos.append(po)
 

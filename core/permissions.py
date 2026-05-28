@@ -51,3 +51,15 @@ class SalesModulePermission(ModulePermission):
 class FinanceModulePermission(ModulePermission):
     module = 'FINANCE'
     message = "You don't have access to the Finance module."
+
+
+class TransportModulePermission(ModulePermission):
+    module = 'TRANSPORT'
+    message = "You don't have access to the Transport module."
+
+
+class CurrencyMasterPermission(BasePermission):
+    message = "You don't have access to currency master."
+
+    def has_permission(self, request, view):
+        return request.user and request.user.is_authenticated

@@ -3,7 +3,6 @@ from django.db import transaction
 from .models import (Requisition, RequisitionItem,
                      VendorRequisitionAssignment, VendorRequisitionItem,
                      VendorQuotation, VendorQuotationItem)
-from core.models import ExchangeRate
 from inventory.serializers import ProductSerializer
 from vendors.serializers import VendorSerializer
 from vendors.models import Vendor
@@ -33,7 +32,7 @@ class RequisitionSerializer(serializers.ModelSerializer):
         fields = ['id', 'requisition_number', 'requisition_date', 'remarks',
                   'created_by', 'created_by_name', 'created_by_code',
                   'is_assigned', 'total_items', 'items', 'created_at', 'updated_at']
-        read_only_fields = ['id', 'requisition_number', 'created_by',
+        read_only_fields = ['id', 'created_by',
                            'is_assigned', 'created_at', 'updated_at']
 
     def get_total_items(self, obj):
@@ -42,21 +41,40 @@ class RequisitionSerializer(serializers.ModelSerializer):
 class RequisitionCreateSerializer(serializers.ModelSerializer):
     """Serializer for creating requisitions"""
     items = RequisitionItemSerializer(many=True)
+    requisition_number = serializers.CharField(
+        required=False, allow_blank=True,
+        help_text="Optional manual PR reference. Auto-generated if not provided."
+    )
 
     class Meta:
         model = Requisition
-        fields = ['requisition_date', 'remarks', 'items']
+        fields = ['requisition_number', 'requisition_date', 'remarks', 'items']
 
     def validate_items(self, value):
         if not value:
             raise serializers.ValidationError("At least one item is required")
         return value
 
+    def validate_requisition_number(self, value):
+        if value and Requisition.objects.filter(requisition_number=value).exists():
+            raise serializers.ValidationError("This requisition number already exists.")
+        return value
+
     def create(self, validated_data):
         items_data = validated_data.pop('items')
+        req_number = validated_data.pop('requisition_number', None)
+        if req_number:
+            validated_data['requisition_number'] = req_number
         requisition = Requisition.objects.create(**validated_data)
+
+        from inventory.models import Product
         for item_data in items_data:
             RequisitionItem.objects.create(requisition=requisition, **item_data)
+            product = item_data.get('product')
+            if product and not product.requisition_number:
+                product.requisition_number = requisition.requisition_number
+                product.save(update_fields=['requisition_number'])
+
         return requisition
 
 
@@ -245,10 +263,9 @@ class VendorQuotationItemSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'vendor_item', 'product', 'product_name', 'product_code',
             'unit', 'quantity', 'quoted_rate', 'amount',
-            'original_quoted_rate', 'original_amount',
             'remarks'
         ]
-        read_only_fields = ['id', 'amount', 'original_amount']
+        read_only_fields = ['id', 'amount']
 
 class VendorQuotationSerializer(serializers.ModelSerializer):
     """Serializer for viewing quotations"""
@@ -265,15 +282,13 @@ class VendorQuotationSerializer(serializers.ModelSerializer):
             'id', 'quotation_number', 'assignment', 'vendor_name', 'vendor_code',
             'requisition_number', 'quotation_date', 'reference_number',
             'validity_date', 'payment_terms', 'delivery_terms', 'remarks',
-            'currency', 'exchange_rate',
-            'total_amount', 'original_total_amount',
+            'currency', 'total_amount',
             'is_selected', 'created_by', 'created_by_name',
             'total_items', 'items', 'created_at', 'updated_at'
         ]
         read_only_fields = [
             'id', 'quotation_number', 'quotation_date', 'created_by',
-            'exchange_rate', 'total_amount', 'original_total_amount',
-            'created_at', 'updated_at'
+            'total_amount', 'created_at', 'updated_at'
         ]
 
     def get_total_items(self, obj):
@@ -343,19 +358,9 @@ class VendorQuotationCreateSerializer(serializers.Serializer):
         assignment = validated_data.pop('assignment')
         currency = validated_data.pop('currency', 'INR')
 
-        exchange_rate = 1
-        if currency == 'USD':
-            try:
-                exchange_rate = ExchangeRate.get_current_rate()
-            except ValueError as e:
-                raise serializers.ValidationError({
-                    'currency': str(e)
-                })
-
         quotation = VendorQuotation.objects.create(
             assignment=assignment,
             currency=currency,
-            exchange_rate=exchange_rate,
             reference_number=validated_data.get('reference_number', ''),
             validity_date=validated_data.get('validity_date'),
             payment_terms=validated_data.get('payment_terms', ''),
@@ -365,7 +370,6 @@ class VendorQuotationCreateSerializer(serializers.Serializer):
         )
 
         total_amount = 0
-        original_total = 0
         for item_data in items_data:
             try:
                 vendor_item = VendorRequisitionItem.objects.get(id=item_data['vendor_item'])
@@ -377,35 +381,21 @@ class VendorQuotationCreateSerializer(serializers.Serializer):
             quoted_rate = item_data['quoted_rate']
 
             try:
-                if currency == 'USD':
-                    quotation_item = VendorQuotationItem.objects.create(
-                        quotation=quotation,
-                        vendor_item=vendor_item,
-                        product=vendor_item.product,
-                        quantity=vendor_item.quantity,
-                        original_quoted_rate=quoted_rate,
-                        quoted_rate=quoted_rate,
-                        remarks=item_data.get('remarks', '')
-                    )
-                else:
-                    quotation_item = VendorQuotationItem.objects.create(
-                        quotation=quotation,
-                        vendor_item=vendor_item,
-                        product=vendor_item.product,
-                        quantity=vendor_item.quantity,
-                        quoted_rate=quoted_rate,
-                        remarks=item_data.get('remarks', '')
-                    )
-
+                quotation_item = VendorQuotationItem.objects.create(
+                    quotation=quotation,
+                    vendor_item=vendor_item,
+                    product=vendor_item.product,
+                    quantity=vendor_item.quantity,
+                    quoted_rate=quoted_rate,
+                    remarks=item_data.get('remarks', '')
+                )
                 total_amount += quotation_item.amount
-                original_total += quotation_item.original_amount
             except Exception as e:
                 raise serializers.ValidationError({
                     'items': f"Error creating item: {str(e)}"
                 })
 
         quotation.total_amount = total_amount
-        quotation.original_total_amount = original_total
         quotation.save()
         return quotation
 
@@ -462,9 +452,7 @@ class RequisitionFlowSerializer(serializers.Serializer):
                     'quotation_number': quotation.quotation_number,
                     'quotation_date': quotation.quotation_date,
                     'currency': quotation.currency,
-                    'exchange_rate': quotation.exchange_rate,
                     'total_amount': quotation.total_amount,
-                    'original_total_amount': quotation.original_total_amount,
                     'is_selected': quotation.is_selected,
                     'items': []
                 }
@@ -476,8 +464,6 @@ class RequisitionFlowSerializer(serializers.Serializer):
                         'quantity': q_item.quantity,
                         'quoted_rate': q_item.quoted_rate,
                         'amount': q_item.amount,
-                        'original_quoted_rate': q_item.original_quoted_rate,
-                        'original_amount': q_item.original_amount,
                     })
 
                 vendor_data['quotations'].append(quotation_data)

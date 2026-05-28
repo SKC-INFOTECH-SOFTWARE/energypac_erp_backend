@@ -35,8 +35,8 @@ class ProductViewSet(PasswordConfirmDestroyMixin, viewsets.ModelViewSet):
     queryset = Product.objects.all()
     serializer_class = ProductSerializer
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
-    filterset_fields = ['is_active', 'unit']
-    search_fields = ['item_code', 'item_name', 'hsn_code', 'description']
+    filterset_fields = ['is_active', 'unit', 'requisition_number']
+    search_fields = ['item_code', 'item_name', 'hsn_code', 'description', 'requisition_number']
     ordering_fields = ['item_name', 'created_at', 'current_stock', 'rate']
     ordering = ['-created_at']
 
@@ -55,4 +55,17 @@ class ProductViewSet(PasswordConfirmDestroyMixin, viewsets.ModelViewSet):
         """Get only active products"""
         active_products = self.queryset.filter(is_active=True)
         serializer = self.get_serializer(active_products, many=True)
+        return Response(serializer.data)
+
+    @action(detail=False, methods=['get'])
+    def by_requisition(self, request):
+        """Get products linked to a specific requisition number"""
+        req_number = request.query_params.get('requisition_number')
+        if not req_number:
+            return Response(
+                {'error': 'requisition_number parameter is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        products = self.queryset.filter(requisition_number=req_number)
+        serializer = self.get_serializer(products, many=True)
         return Response(serializer.data)

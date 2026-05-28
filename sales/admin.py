@@ -1,5 +1,54 @@
 from django.contrib import admin
-from .models import ClientQuery, SalesQuotation, SalesQuotationItem
+from .models import ClientQuery, SalesQuotation, SalesQuotationItem, ProformaInvoice, ProformaInvoiceItem
+
+
+class ProformaInvoiceItemInline(admin.TabularInline):
+    model = ProformaInvoiceItem
+    extra = 0
+    readonly_fields = ['amount']
+
+
+@admin.register(ProformaInvoice)
+class ProformaInvoiceAdmin(admin.ModelAdmin):
+    list_display  = ['pi_number', 'requisition', 'pi_date', 'currency', 'grand_total', 'status']
+    list_filter   = ['status', 'currency', 'pi_date']
+    search_fields = ['pi_number', 'requisition__requisition_number']
+    readonly_fields = [
+        'pi_number', 'grand_total',
+        'revision_number', 'is_revised',
+        'locked_by', 'locked_at',
+        'created_at', 'updated_at',
+    ]
+    inlines = [ProformaInvoiceItemInline]
+
+    fieldsets = (
+        ('PI Details', {
+            'fields': ('pi_number', 'requisition', 'pi_date', 'currency', 'status')
+        }),
+        ('Header Info', {
+            'fields': (
+                'lc_number', 'exporter_beneficiary', 'exporter_reference',
+                'gst_number', 'consignee', 'applicant_importer',
+                'pre_carriage_by', 'country_of_origin', 'final_destination',
+                'place_of_receipt', 'port_of_loading', 'port_of_discharge',
+                'terms_of_delivery', 'terms_of_payment',
+            ),
+            'classes': ('collapse',),
+        }),
+        ('Amounts', {
+            'fields': ('grand_total',)
+        }),
+        ('T&C / Notes', {
+            'fields': ('terms_and_conditions', 'notes')
+        }),
+        ('Revision', {
+            'fields': ('revision_number', 'is_revised')
+        }),
+        ('Audit', {
+            'fields': ('created_by', 'created_at', 'updated_at'),
+            'classes': ('collapse',),
+        }),
+    )
 
 
 @admin.register(ClientQuery)
@@ -41,10 +90,10 @@ class ClientQueryAdmin(admin.ModelAdmin):
 class SalesQuotationItemInline(admin.TabularInline):
     model = SalesQuotationItem
     extra = 0
-    readonly_fields = ['amount', 'original_amount']
+    readonly_fields = ['amount']
     fields = [
         'product', 'item_code', 'item_name', 'quantity',
-        'unit', 'rate', 'amount', 'original_rate', 'original_amount', 'remarks'
+        'unit', 'rate', 'amount', 'remarks'
     ]
     raw_id_fields = ['product']
 
@@ -61,10 +110,8 @@ class SalesQuotationAdmin(admin.ModelAdmin):
         'client_query__query_number'
     ]
     readonly_fields = [
-        'quotation_number', 'exchange_rate',
+        'quotation_number',
         'subtotal', 'cgst_amount', 'sgst_amount', 'igst_amount', 'total_amount',
-        'original_subtotal', 'original_cgst_amount', 'original_sgst_amount',
-        'original_igst_amount', 'original_total_amount',
         'created_at', 'updated_at'
     ]
     raw_id_fields = ['client_query']
@@ -83,23 +130,16 @@ class SalesQuotationAdmin(admin.ModelAdmin):
         ('Terms & Conditions', {
             'fields': ('payment_terms', 'delivery_terms', 'remarks')
         }),
-        ('Currency', {
-            'fields': ('currency', 'exchange_rate')
+        ('Currency & Amounts', {
+            'fields': ('currency',)
         }),
         ('GST Configuration', {
             'fields': ('cgst_percentage', 'sgst_percentage', 'igst_percentage')
         }),
-        ('Amounts (INR)', {
+        ('Amounts', {
             'fields': (
                 'subtotal', 'cgst_amount', 'sgst_amount',
                 'igst_amount', 'total_amount'
-            ),
-            'classes': ('collapse',)
-        }),
-        ('Original Currency Amounts', {
-            'fields': (
-                'original_subtotal', 'original_cgst_amount', 'original_sgst_amount',
-                'original_igst_amount', 'original_total_amount'
             ),
             'classes': ('collapse',)
         }),

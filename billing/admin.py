@@ -1,90 +1,61 @@
 from django.contrib import admin
-from .models import Bill, BillItem, BillPayment
+from .models import PIBill, PIBillItem, PIBillPayment
 
 
-class BillItemInline(admin.TabularInline):
-    model = BillItem
+class PIBillItemInline(admin.TabularInline):
+    model = PIBillItem
     extra = 0
-    readonly_fields = [
-        'item_code', 'item_name', 'ordered_quantity',
-        'previously_delivered_quantity', 'pending_quantity', 'amount'
-    ]
+    readonly_fields = ['amount']
+    fields = ['pi_item', 'product', 'item_name', 'hsn_code', 'unit', 'quantity', 'rate', 'amount']
+
+
+class PIBillPaymentInline(admin.TabularInline):
+    model = PIBillPayment
+    extra = 0
+    readonly_fields = ['payment_number', 'total_paid_after', 'balance_after', 'recorded_by', 'created_at']
     fields = [
-        'work_order_item', 'item_code', 'item_name', 'ordered_quantity',
-        'previously_delivered_quantity', 'delivered_quantity',
-        'pending_quantity', 'unit', 'rate', 'amount'
-    ]
-
-
-class BillPaymentInline(admin.TabularInline):
-    model  = BillPayment
-    extra  = 0
-    readonly_fields = [
         'payment_number', 'amount', 'payment_date', 'payment_mode',
-        'reference_number', 'total_paid_after', 'balance_after',
+        'reference_number', 'remarks', 'total_paid_after', 'balance_after',
         'recorded_by', 'created_at',
     ]
-    fields = readonly_fields + ['remarks']
-
-    def has_add_permission(self, request, obj=None):
-        return False   # payments are created only mark_paid API
-
-    def has_delete_permission(self, request, obj=None):
-        return False   # payment records are immutable
 
 
-@admin.register(Bill)
-class BillAdmin(admin.ModelAdmin):
+@admin.register(PIBill)
+class PIBillAdmin(admin.ModelAdmin):
     list_display = [
-        'bill_number', 'client_name', 'bill_date', 'currency', 'total_amount',
-        'net_payable', 'amount_paid', 'balance', 'status', 'created_at'
+        'bill_number', 'client_name', 'bill_date', 'bill_type',
+        'currency', 'total_amount', 'net_payable', 'amount_paid',
+        'balance', 'status', 'created_at',
     ]
-    list_filter  = ['status', 'bill_date', 'created_at']
-    search_fields = [
-        'bill_number', 'client_name', 'work_order__wo_number'
-    ]
+    list_filter = ['status', 'bill_type', 'bill_date', 'created_at']
+    search_fields = ['bill_number', 'client_name', 'proforma_invoice__pi_number']
     readonly_fields = [
-        'bill_number', 'work_order', 'currency', 'exchange_rate',
-        'subtotal', 'cgst_amount', 'sgst_amount', 'igst_amount', 'total_amount',
-        'original_subtotal', 'original_cgst_amount', 'original_sgst_amount',
-        'original_igst_amount', 'original_total_amount',
-        'original_freight_cost', 'original_net_payable',
-        'advance_deducted', 'net_payable', 'balance',
-        'created_at', 'updated_at'
+        'bill_number', 'subtotal', 'cgst_amount', 'sgst_amount', 'igst_amount',
+        'total_amount', 'net_payable', 'balance', 'created_at', 'updated_at',
     ]
-    inlines     = [BillItemInline, BillPaymentInline]
-    ordering    = ['-bill_number']
+    raw_id_fields = ['proforma_invoice', 'created_by']
+    inlines = [PIBillItemInline, PIBillPaymentInline]
+    ordering = ['-bill_number']
     date_hierarchy = 'bill_date'
-    list_per_page  = 50
+    list_per_page = 50
 
     fieldsets = (
         ('Bill Details', {
-            'fields': ('bill_number', 'work_order', 'bill_date', 'bill_type', 'status')
+            'fields': ('bill_number', 'proforma_invoice', 'bill_date', 'bill_type', 'status')
         }),
         ('Client Information', {
             'fields': ('client_name', 'contact_person', 'phone', 'email', 'address')
         }),
-        ('Currency', {
-            'fields': ('currency', 'exchange_rate')
-        }),
-        ('Financial Details (INR)', {
+        ('Currency & Financial Details', {
             'fields': (
-                'subtotal',
+                'currency', 'conversion_rate', 'subtotal',
                 'cgst_percentage', 'sgst_percentage', 'igst_percentage',
-                'cgst_amount',     'sgst_amount',     'igst_amount',
-                'total_amount',
+                'cgst_amount', 'sgst_amount', 'igst_amount',
+                'discount_amount', 'total_amount',
             )
         }),
-        ('Original Currency Amounts', {
-            'fields': (
-                'original_subtotal',
-                'original_cgst_amount', 'original_sgst_amount', 'original_igst_amount',
-                'original_total_amount', 'original_freight_cost', 'original_net_payable',
-            ),
-            'classes': ('collapse',)
-        }),
-        ('Advance & Payment', {
-            'fields': ('advance_deducted', 'net_payable', 'amount_paid', 'balance')
+        ('Payment', {
+            'fields': ('net_payable', 'amount_paid', 'balance')
         }),
         ('Additional', {
             'fields': ('remarks',)
@@ -99,86 +70,19 @@ class BillAdmin(admin.ModelAdmin):
         return False
 
 
-@admin.register(BillItem)
-class BillItemAdmin(admin.ModelAdmin):
-    list_display  = [
-        'bill', 'item_code', 'item_name', 'ordered_quantity',
-        'delivered_quantity', 'pending_quantity', 'amount'
-    ]
-    list_filter   = ['bill__status']
-    search_fields = ['item_code', 'item_name', 'bill__bill_number']
-    readonly_fields = [
-        'product', 'item_code', 'item_name', 'description',
-        'hsn_code', 'unit', 'ordered_quantity',
-        'previously_delivered_quantity', 'pending_quantity',
-        'rate', 'amount'
-    ]
-
-    fieldsets = (
-        ('Item Details', {
-            'fields': (
-                'bill', 'work_order_item', 'product', 'item_code',
-                'item_name', 'description', 'hsn_code', 'unit'
-            )
-        }),
-        ('Quantities', {
-            'fields': (
-                'ordered_quantity', 'previously_delivered_quantity',
-                'delivered_quantity', 'pending_quantity'
-            )
-        }),
-        ('Pricing', {
-            'fields': ('rate', 'amount')
-        }),
-        ('Additional', {
-            'fields': ('remarks',)
-        }),
-    )
+@admin.register(PIBillPayment)
+class PIBillPaymentAdmin(admin.ModelAdmin):
+    list_display = ['pi_bill', 'payment_number', 'amount', 'payment_date', 'payment_mode', 'recorded_by', 'created_at']
+    list_filter = ['payment_mode', 'payment_date']
+    search_fields = ['pi_bill__bill_number', 'reference_number']
+    readonly_fields = ['payment_number', 'total_paid_after', 'balance_after', 'recorded_by', 'created_at']
+    raw_id_fields = ['pi_bill']
+    ordering = ['-created_at']
 
 
-@admin.register(BillPayment)
-class BillPaymentAdmin(admin.ModelAdmin):
-    list_display  = [
-        'bill', 'payment_number', 'amount', 'payment_date',
-        'payment_mode', 'reference_number', 'total_paid_after',
-        'balance_after', 'recorded_by', 'created_at',
-    ]
-    list_filter   = ['payment_mode', 'payment_date', 'created_at']
-    search_fields = [
-        'bill__bill_number', 'bill__client_name',
-        'reference_number',
-    ]
-    readonly_fields = [
-        'bill', 'payment_number', 'amount', 'payment_date',
-        'payment_mode', 'reference_number', 'total_paid_after',
-        'balance_after', 'recorded_by', 'created_at',
-    ]
-    ordering = ['bill', 'payment_number']
-
-    fieldsets = (
-        ('Payment Details', {
-            'fields': (
-                'bill', 'payment_number', 'amount',
-                'payment_date', 'payment_mode', 'reference_number',
-            )
-        }),
-        ('Running Totals (snapshot)', {
-            'fields': ('total_paid_after', 'balance_after')
-        }),
-        ('Additional', {
-            'fields': ('remarks',)
-        }),
-        ('Audit', {
-            'fields': ('recorded_by', 'created_at'),
-            'classes': ('collapse',)
-        }),
-    )
-
-    def has_add_permission(self, request):
-        return False    # only created via API
-
-    def has_delete_permission(self, request, obj=None):
-        return False    # immutable audit trail
-
-    def has_change_permission(self, request, obj=None):
-        return False    # immutable
+@admin.register(PIBillItem)
+class PIBillItemAdmin(admin.ModelAdmin):
+    list_display = ['pi_bill', 'item_name', 'quantity', 'rate', 'amount']
+    list_filter = ['pi_bill__status']
+    search_fields = ['item_name', 'pi_bill__bill_number']
+    readonly_fields = ['amount']

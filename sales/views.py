@@ -1,3 +1,5 @@
+
+
 from rest_framework import viewsets, status, filters
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -9,8 +11,13 @@ from drf_spectacular.utils import extend_schema, OpenApiParameter, OpenApiTypes,
 from rest_framework import serializers as drf_serializers
 import os
 
+from django.utils import timezone
+from datetime import timedelta
+
 from core.permissions import SalesModulePermission
-from .models import ClientQuery, SalesQuotation, SalesQuotationItem
+from core.password_confirm import check_password_confirmation
+from audit_logs.models import AuditLog
+from .models import ClientQuery, SalesQuotation, SalesQuotationItem, ProformaInvoice
 from .serializers import (
     ClientQuerySerializer,
     ClientQueryCreateSerializer,
@@ -18,7 +25,12 @@ from .serializers import (
     SalesQuotationCreateSerializer,
     SalesQuotationUpdateSerializer,
     SalesQuotationItemSerializer,
+    ProformaInvoiceSerializer,
+    ProformaInvoiceCreateSerializer,
+    ProformaInvoiceUpdateSerializer,
 )
+
+LOCK_TIMEOUT_MINUTES = 30
 
 
 class ClientQueryViewSet(viewsets.ModelViewSet):
@@ -401,3 +413,204 @@ class SalesQuotationItemViewSet(viewsets.ModelViewSet):
         quotation = instance.quotation
         instance.delete()
         quotation.calculate_totals()
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Proforma Invoice ViewSet
+# ═════════════════════════════════════════════════════════════════════════════
+
+class ProformaInvoiceViewSet(viewsets.ModelViewSet):
+    permission_classes = [SalesModulePermission]
+    queryset = ProformaInvoice.objects.all().select_related(
+        'requisition', 'created_by', 'locked_by'
+    ).prefetch_related('items__product')
+    serializer_class = ProformaInvoiceSerializer
+
+    filter_backends  = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
+    filterset_fields = ['requisition', 'status', 'currency']
+    search_fields    = ['pi_number', 'requisition__requisition_number']
+    ordering         = ['-pi_number']
+
+    def get_serializer_class(self):
+        if self.action == 'create':
+            return ProformaInvoiceCreateSerializer
+        if self.action in ('update', 'partial_update'):
+            return ProformaInvoiceUpdateSerializer
+        return ProformaInvoiceSerializer
+
+    def perform_create(self, serializer):
+        pi = serializer.save(created_by=self.request.user)
+        AuditLog.log(self.request.user, 'CREATE', pi, {
+            'pi_number': pi.pi_number,
+            'requisition': pi.requisition.requisition_number,
+            'currency': pi.currency,
+            'grand_total': str(pi.grand_total),
+        })
+
+    # ── Edit with revision tracking ──────────────────────────────────────
+
+    def perform_update(self, serializer):
+        pi = serializer.instance
+
+        if pi.locked_by and pi.locked_by != self.request.user:
+            if pi.locked_at and (timezone.now() - pi.locked_at) < timedelta(minutes=LOCK_TIMEOUT_MINUTES):
+                from rest_framework.exceptions import PermissionDenied
+                raise PermissionDenied(
+                    f'PI is locked for editing by {pi.locked_by.get_full_name()}'
+                )
+
+        old_values = {
+            'pi_number': pi.pi_number,
+            'revision_number': pi.revision_number,
+            'grand_total': str(pi.grand_total),
+        }
+
+        pi.revision_number += 1
+        pi.is_revised = True
+        if not pi.pi_number.endswith('R'):
+            pi.pi_number = pi.pi_number + 'R'
+
+        serializer.save()
+        pi.refresh_from_db()
+
+        AuditLog.log(self.request.user, 'UPDATE', pi, {
+            'old': old_values,
+            'new': {
+                'pi_number': pi.pi_number,
+                'revision_number': pi.revision_number,
+                'grand_total': str(pi.grand_total),
+            },
+        })
+
+    # ── Lock / Unlock ────────────────────────────────────────────────────
+
+    @action(detail=True, methods=['post'])
+    def lock(self, request, pk=None):
+        pi = self.get_object()
+        if pi.locked_by and pi.locked_by != request.user:
+            if pi.locked_at and (timezone.now() - pi.locked_at) < timedelta(minutes=LOCK_TIMEOUT_MINUTES):
+                return Response(
+                    {
+                        'error': 'PI is currently being edited by another user',
+                        'locked_by': pi.locked_by.get_full_name(),
+                        'locked_at': pi.locked_at.isoformat(),
+                    },
+                    status=status.HTTP_409_CONFLICT,
+                )
+        ProformaInvoice.objects.filter(pk=pi.pk).update(
+            locked_by=request.user, locked_at=timezone.now(),
+        )
+        pi.refresh_from_db()
+        return Response({
+            'message': 'PI locked for editing',
+            'pi_number': pi.pi_number,
+            'locked_by': request.user.get_full_name(),
+            'locked_at': pi.locked_at.isoformat(),
+        })
+
+    @action(detail=True, methods=['post'])
+    def unlock(self, request, pk=None):
+        pi = self.get_object()
+        if pi.locked_by and pi.locked_by != request.user and request.user.role != 'ADMIN':
+            return Response(
+                {'error': 'Only the lock holder or an admin can unlock'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        ProformaInvoice.objects.filter(pk=pi.pk).update(locked_by=None, locked_at=None)
+        return Response({'message': 'PI unlocked', 'pi_number': pi.pi_number})
+
+    # ── Status transitions ─────────────────────────────────────────────
+
+    ALLOWED_TRANSITIONS = {
+        'DRAFT': ['SENT', 'CANCELLED'],
+        'SENT': ['ACCEPTED', 'CANCELLED'],
+        'ACCEPTED': ['CANCELLED'],
+        'CANCELLED': [],
+    }
+
+    def _change_status(self, request, pi, new_status):
+        allowed = self.ALLOWED_TRANSITIONS.get(pi.status, [])
+        if new_status not in allowed:
+            return Response(
+                {
+                    'error': f'Cannot move from {pi.status} to {new_status}',
+                    'current_status': pi.status,
+                    'allowed_transitions': allowed,
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        old_status = pi.status
+        pi.status = new_status
+        pi.save()
+        AuditLog.log(request.user, 'STATUS_CHANGE', pi, {
+            'pi_number': pi.pi_number,
+            'old_status': old_status,
+            'new_status': new_status,
+        })
+        return Response({
+            'message': f'PI status changed to {new_status}',
+            'pi': ProformaInvoiceSerializer(pi).data,
+        })
+
+    @action(detail=True, methods=['post'])
+    def send(self, request, pk=None):
+        pi = self.get_object()
+        return self._change_status(request, pi, 'SENT')
+
+    @action(detail=True, methods=['post'])
+    def accept(self, request, pk=None):
+        pi = self.get_object()
+        return self._change_status(request, pi, 'ACCEPTED')
+
+    @action(detail=True, methods=['post'])
+    def cancel(self, request, pk=None):
+        password_error = check_password_confirmation(request)
+        if password_error:
+            return password_error
+        pi = self.get_object()
+        return self._change_status(request, pi, 'CANCELLED')
+
+    # ── Requisition items with purchase status ───────────────────────────
+
+    @action(detail=False, methods=['get'])
+    def requisition_items(self, request):
+        """
+        GET /api/proforma-invoices/requisition_items?requisition=uuid
+        Returns requisition items with their purchase status.
+        """
+        from purchase_orders.models import PurchaseOrderItem
+        from requisitions.models import RequisitionItem
+
+        req_id = request.query_params.get('requisition')
+        if not req_id:
+            return Response({'error': 'requisition param required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        req_items = RequisitionItem.objects.filter(
+            requisition_id=req_id
+        ).select_related('product')
+
+        result = []
+        for ri in req_items:
+            po_item = PurchaseOrderItem.objects.filter(
+                po__requisition_id=req_id, product=ri.product,
+            ).first()
+
+            if not po_item:
+                purchase_status = 'PENDING'
+            elif po_item.is_received:
+                purchase_status = 'COMPLETED'
+            else:
+                purchase_status = 'PO_CREATED'
+
+            result.append({
+                'requisition_item_id': str(ri.id),
+                'product_id': str(ri.product.id),
+                'product_code': ri.product.item_code,
+                'product_name': ri.product.item_name,
+                'hsn_code': ri.product.hsn_code,
+                'unit': ri.product.unit,
+                'quantity': float(ri.quantity),
+                'purchase_status': purchase_status,
+            })
+
+        return Response({'items': result})

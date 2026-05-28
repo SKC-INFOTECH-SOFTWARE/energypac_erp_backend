@@ -1,5 +1,3 @@
-# inventory/models.py
-
 from django.db import models
 import uuid
 
@@ -23,6 +21,26 @@ class Product(models.Model):
                                         help_text="Minimum stock level")
     rate          = models.DecimalField(max_digits=10, decimal_places=2, default=0,
                                         help_text="Price per unit")
+    requisition_number = models.CharField(
+        max_length=50, blank=True, default='',
+        help_text="Requisition number this item belongs to"
+    )
+    purchase_count = models.PositiveIntegerField(
+        default=0,
+        help_text="How many times this item has been purchased (received in PO)"
+    )
+    sale_count = models.PositiveIntegerField(
+        default=0,
+        help_text="How many times this item has been sold (via PI)"
+    )
+    last_purchase_date = models.DateField(
+        null=True, blank=True,
+        help_text="Date of last purchase (PO received)"
+    )
+    last_sale_date = models.DateField(
+        null=True, blank=True,
+        help_text="Date of last sale (PI created/sent)"
+    )
     is_active     = models.BooleanField(default=True)
     created_at    = models.DateTimeField(auto_now_add=True)
     updated_at    = models.DateTimeField(auto_now=True)

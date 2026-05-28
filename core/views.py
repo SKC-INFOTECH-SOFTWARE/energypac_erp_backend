@@ -1,10 +1,21 @@
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
-from rest_framework import status
-from .models import ExchangeRate
-from .serializers import ExchangeRateSerializer, ExchangeRateCreateUpdateSerializer
+from rest_framework import viewsets, status, filters
+from django_filters.rest_framework import DjangoFilterBackend
+from .models import Currency, ExchangeRate
+from .serializers import CurrencySerializer, ExchangeRateSerializer, ExchangeRateCreateUpdateSerializer
 from .permissions import IsAdmin
+
+
+class CurrencyViewSet(viewsets.ModelViewSet):
+    permission_classes = [IsAuthenticated]
+    queryset = Currency.objects.all()
+    serializer_class = CurrencySerializer
+    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
+    filterset_fields = ['is_active']
+    search_fields = ['code', 'name']
+    ordering = ['code']
 
 
 class CurrentExchangeRateView(APIView):
@@ -30,7 +41,7 @@ class CurrentExchangeRateView(APIView):
 
 class ExchangeRateListCreateView(APIView):
     """
-    Admin API for exchange rates.
+    Currency Master API for exchange rates.
 
     GET  /api/admin/exchange-rates       — List all exchange rates (history)
     POST /api/admin/exchange-rates       — Create a new exchange rate
@@ -57,7 +68,7 @@ class ExchangeRateListCreateView(APIView):
 
 class ExchangeRateDetailView(APIView):
     """
-    Admin API for single exchange rate.
+    Currency Master API for single exchange rate.
 
     GET    /api/admin/exchange-rates/{id}   — Get details
     PUT    /api/admin/exchange-rates/{id}   — Full update

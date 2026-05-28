@@ -74,22 +74,19 @@ class VendorAssignmentAdmin(admin.ModelAdmin):
 class VendorQuotationItemInline(admin.TabularInline):
     model = VendorQuotationItem
     extra = 0
-    readonly_fields = ['amount', 'original_amount']
+    readonly_fields = ['amount']
     raw_id_fields = ['vendor_item', 'product']
-    fields = ['vendor_item', 'product', 'quantity', 'quoted_rate', 'amount',
-              'original_quoted_rate', 'original_amount', 'remarks']
+    fields = ['vendor_item', 'product', 'quantity', 'quoted_rate', 'amount', 'remarks']
 
 @admin.register(VendorQuotation)
 class VendorQuotationAdmin(admin.ModelAdmin):
     list_display = ['quotation_number', 'assignment', 'quotation_date',
-                    'currency', 'total_amount', 'original_total_amount',
-                    'is_selected', 'created_at']
+                    'currency', 'total_amount', 'is_selected', 'created_at']
     list_filter = ['is_selected', 'quotation_date', 'created_at']
     search_fields = ['quotation_number', 'reference_number',
                      'assignment__vendor__vendor_name',
                      'assignment__requisition__requisition_number']
     readonly_fields = ['quotation_number', 'quotation_date', 'total_amount',
-                       'original_total_amount', 'exchange_rate',
                        'created_at', 'updated_at']
     inlines = [VendorQuotationItemInline]
     raw_id_fields = ['assignment']
@@ -106,11 +103,8 @@ class VendorQuotationAdmin(admin.ModelAdmin):
         ('Terms', {
             'fields': ('payment_terms', 'delivery_terms', 'remarks')
         }),
-        ('Currency', {
-            'fields': ('currency', 'exchange_rate')
-        }),
-        ('Amount', {
-            'fields': ('total_amount', 'original_total_amount')
+        ('Currency & Amount', {
+            'fields': ('currency', 'total_amount')
         }),
         ('Status', {
             'fields': ('is_selected',)
@@ -122,4 +116,4 @@ class VendorQuotationAdmin(admin.ModelAdmin):
     )
 
     def has_delete_permission(self, request, obj=None):
-        return False  # Cannot delete quotations
+        return False

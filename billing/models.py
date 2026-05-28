@@ -1,34 +1,18 @@
-from django.db import models, transaction
+from django.db import models
 from django.conf import settings
-from work_orders.models import WorkOrder, WorkOrderItem
 from inventory.models import Product
+from sales.models import ProformaInvoice, ProformaInvoiceItem
 from core.models import CURRENCY_CHOICES
 import uuid
 from decimal import Decimal
 from datetime import datetime
 
 
-class Bill(models.Model):
-    """
-    Bill/Invoice - Generated from Work Order
+# ═════════════════════════════════════════════════════════════════════════════
+# PI Bill — Generated from Proforma Invoice (GST + Discount applied here)
+# ═════════════════════════════════════════════════════════════════════════════
 
-    Bill Types
-    ----------
-    DOMESTIC     : Standard GST bill for domestic clients (CGST+SGST or IGST).
-    INTERNATIONAL: Export invoice for foreign clients. GST can be set to 0%
-                   for zero-rated exports. All amounts are always in INR.
-
-    Freight Cost
-    ------------
-    freight_cost is a flat charge added AFTER tax but BEFORE advance deduction:
-        net_payable = total_amount + freight_cost - advance_deducted
-
-    Export Fields (optional — mainly for INTERNATIONAL bills)
-    ---------------------------------------------------------
-    importer_address, port_of_loading, port_of_discharge, final_destination,
-    pre_carriage_by, terms_of_delivery_payment, vessel_flight_no
-    """
-
+class PIBill(models.Model):
     BILL_TYPE_CHOICES = [
         ('DOMESTIC',      'Domestic'),
         ('INTERNATIONAL', 'International'),
@@ -42,363 +26,112 @@ class Bill(models.Model):
     ]
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    bill_number = models.CharField(max_length=50, unique=True, editable=False)
 
-    bill_number = models.CharField(
-        max_length=50,
-        unique=True,
-        editable=False,
-        help_text="Auto-generated: BILL/YEAR/NUMBER"
+    bill_type = models.CharField(max_length=15, choices=BILL_TYPE_CHOICES, default='DOMESTIC')
+    proforma_invoice = models.ForeignKey(
+        ProformaInvoice, on_delete=models.PROTECT, related_name='pi_bills',
     )
 
-    # ── Bill type ─────────────────────────────────────────────────────────────
-    bill_type = models.CharField(
-        max_length=15,
-        choices=BILL_TYPE_CHOICES,
-        default='DOMESTIC',
-        help_text="Domestic or International (classification only; all amounts in INR)"
-    )
+    bill_date = models.DateField()
 
-    work_order = models.ForeignKey(
-        WorkOrder,
-        on_delete=models.PROTECT,
-        related_name='bills',
-        help_text="Reference work order"
-    )
-
-    bill_date = models.DateField(help_text="Bill generation date")
-
-    # Client details (copied from WO)
     client_name    = models.CharField(max_length=200)
     contact_person = models.CharField(max_length=100, blank=True)
     phone          = models.CharField(max_length=15, blank=True)
     email          = models.EmailField(blank=True)
     address        = models.TextField(blank=True)
 
-    # ── Export / International shipping fields (all optional) ─────────────────
-    importer_address = models.TextField(
-        blank=True,
-        help_text="Importer's address (for international / export bills)"
-    )
-    port_of_loading = models.CharField(
-        max_length=200, blank=True,
-        help_text="Port of loading"
-    )
-    port_of_discharge = models.CharField(
-        max_length=200, blank=True,
-        help_text="Port of discharge"
-    )
-    final_destination = models.CharField(
-        max_length=200, blank=True,
-        help_text="Final destination"
-    )
-    pre_carriage_by = models.CharField(
-        max_length=200, blank=True,
-        help_text="Pre-carriage by (mode of transport to loading port)"
-    )
-    terms_of_delivery_payment = models.CharField(
-        max_length=200, blank=True,
-        help_text="Terms of delivery/payment (e.g. CIF, FOB, DAP, EXW)"
-    )
-    vessel_flight_no = models.CharField(
-        max_length=100, blank=True,
-        help_text="Vessel name / flight number"
+    currency = models.CharField(max_length=3, choices=CURRENCY_CHOICES, default='INR')
+    conversion_rate = models.DecimalField(
+        max_digits=10, decimal_places=4, null=True, blank=True,
+        help_text="INR conversion rate (immutable, copied from PI)"
     )
 
-    # ── Currency (inherited from Work Order) ─────────────────────────────────
-    currency = models.CharField(
-        max_length=3, choices=CURRENCY_CHOICES, default='INR',
-        help_text="Currency inherited from work order"
-    )
-    exchange_rate = models.DecimalField(
-        max_digits=10, decimal_places=4, default=1,
-        help_text="USD to INR rate (1 if INR)"
-    )
-
-    # ── Financial amounts (always stored in INR) ──────────────────────────────
-    subtotal = models.DecimalField(
-        max_digits=12, decimal_places=2, default=0,
-        help_text="Sum of delivered items before tax (INR)"
-    )
+    subtotal = models.DecimalField(max_digits=12, decimal_places=2, default=0)
 
     cgst_percentage = models.DecimalField(max_digits=5, decimal_places=2, default=0)
     sgst_percentage = models.DecimalField(max_digits=5, decimal_places=2, default=0)
     igst_percentage = models.DecimalField(max_digits=5, decimal_places=2, default=0)
-
     cgst_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     sgst_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     igst_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
 
-    total_amount = models.DecimalField(
+    discount_amount = models.DecimalField(
         max_digits=12, decimal_places=2, default=0,
-        help_text="Subtotal + all taxes (INR)"
+        help_text="Discount subtracted from total"
     )
 
-    # ── Freight ───────────────────────────────────────────────────────────────
-    freight_cost = models.DecimalField(
-        max_digits=12, decimal_places=2, default=0,
-        help_text="Flat freight / shipping charge added after tax (INR)"
-    )
+    total_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0,
+                                       help_text="subtotal + GST - discount")
+    net_payable = models.DecimalField(max_digits=12, decimal_places=2, default=0)
 
-    # ── Advance deduction ─────────────────────────────────────────────────────
-    advance_deducted = models.DecimalField(
-        max_digits=12, decimal_places=2, default=0,
-        help_text="Advance amount deducted in this bill (INR)"
-    )
-
-    net_payable = models.DecimalField(
-        max_digits=12, decimal_places=2, default=0,
-        help_text="total_amount + freight_cost - advance_deducted (INR)"
-    )
-
-    # ── Payment tracking ──────────────────────────────────────────────────────
-    amount_paid = models.DecimalField(
-        max_digits=12, decimal_places=2, default=0,
-        help_text="Total amount paid by client (sum of all BillPayment rows, INR)"
-    )
-
-    balance = models.DecimalField(
-        max_digits=12, decimal_places=2, default=0,
-        help_text="Remaining balance (net_payable - amount_paid, INR)"
-    )
-
-    # ── Original currency amounts ────────────────────────────────────────────
-    original_subtotal = models.DecimalField(
-        max_digits=12, decimal_places=2, default=0,
-        help_text="Subtotal in original currency"
-    )
-    original_cgst_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
-    original_sgst_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
-    original_igst_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
-    original_total_amount = models.DecimalField(
-        max_digits=12, decimal_places=2, default=0,
-        help_text="Total in original currency"
-    )
-    original_freight_cost = models.DecimalField(
-        max_digits=12, decimal_places=2, default=0,
-        help_text="Freight cost in original currency"
-    )
-    original_net_payable = models.DecimalField(
-        max_digits=12, decimal_places=2, default=0,
-        help_text="Net payable in original currency"
-    )
+    amount_paid = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    balance = models.DecimalField(max_digits=12, decimal_places=2, default=0)
 
     remarks = models.TextField(blank=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='GENERATED')
 
-    status = models.CharField(
-        max_length=20, choices=STATUS_CHOICES, default='GENERATED'
-    )
-
-    created_by = models.ForeignKey(
-        settings.AUTH_USER_MODEL, on_delete=models.PROTECT
-    )
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
+                                    related_name='pi_bills_created')
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        db_table = 'bills'
+        db_table = 'pi_bills'
         ordering = ['-bill_number']
-        verbose_name = 'Bill'
-        verbose_name_plural = 'Bills'
-
-    # ── save ──────────────────────────────────────────────────────────────────
 
     def save(self, *args, **kwargs):
         if not self.bill_number:
             year = datetime.now().year
-            last_bill = Bill.objects.filter(
-                bill_number__startswith=f'BILL/{year}/'
+            last = PIBill.objects.filter(
+                bill_number__startswith=f'PIB/{year}/'
             ).order_by('-bill_number').first()
-
-            new_num = int(last_bill.bill_number.split('/')[-1]) + 1 if last_bill else 1
-            self.bill_number = f'BILL/{year}/{new_num:04d}'
-
+            new_num = int(last.bill_number.split('/')[-1]) + 1 if last else 1
+            self.bill_number = f'PIB/{year}/{new_num:04d}'
         super().save(*args, **kwargs)
 
-    # ── calculate_totals ──────────────────────────────────────────────────────
-
     def calculate_totals(self):
-        """
-        Recalculate all amounts (INR is authoritative).
-        Original currency amounts are derived for display.
-        """
-        self.subtotal = sum(item.amount for item in self.items.all())
-
-        wo = self.work_order
-        self.cgst_percentage = wo.cgst_percentage
-        self.sgst_percentage = wo.sgst_percentage
-        self.igst_percentage = wo.igst_percentage
-
+        self.subtotal = sum(item.amount for item in self.pi_bill_items.all())
         self.cgst_amount = (self.subtotal * self.cgst_percentage) / 100
         self.sgst_amount = (self.subtotal * self.sgst_percentage) / 100
         self.igst_amount = (self.subtotal * self.igst_percentage) / 100
-
         self.total_amount = (
-            self.subtotal +
-            self.cgst_amount +
-            self.sgst_amount +
-            self.igst_amount
+            self.subtotal + self.cgst_amount + self.sgst_amount + self.igst_amount
+            - self.discount_amount
         )
-
-        available_advance    = wo.advance_remaining
-        self.advance_deducted = min(self.total_amount + self.freight_cost, available_advance)
-        self.net_payable     = self.total_amount + self.freight_cost - self.advance_deducted
-        self.balance         = self.net_payable - self.amount_paid
-
-        if self.currency == 'USD' and self.exchange_rate:
-            self.original_subtotal = sum(
-                item.original_amount for item in self.items.all()
-            )
-            self.original_cgst_amount = (self.original_subtotal * self.cgst_percentage) / 100
-            self.original_sgst_amount = (self.original_subtotal * self.sgst_percentage) / 100
-            self.original_igst_amount = (self.original_subtotal * self.igst_percentage) / 100
-            self.original_total_amount = (
-                self.original_subtotal +
-                self.original_cgst_amount +
-                self.original_sgst_amount +
-                self.original_igst_amount
-            )
-            self.original_freight_cost = self.original_freight_cost or (
-                self.freight_cost / self.exchange_rate if self.exchange_rate else self.freight_cost
-            )
-            self.original_net_payable = (
-                self.original_total_amount +
-                self.original_freight_cost -
-                (self.advance_deducted / self.exchange_rate if self.exchange_rate else self.advance_deducted)
-            )
-        else:
-            self.original_subtotal = self.subtotal
-            self.original_cgst_amount = self.cgst_amount
-            self.original_sgst_amount = self.sgst_amount
-            self.original_igst_amount = self.igst_amount
-            self.original_total_amount = self.total_amount
-            self.original_freight_cost = self.freight_cost
-            self.original_net_payable = self.net_payable
-
+        self.net_payable = self.total_amount
+        self.balance = self.net_payable - self.amount_paid
         self.save()
-
-    def update_work_order_advance(self):
-        """Update work order advance after bill generation."""
-        wo = self.work_order
-        wo.advance_deducted      += self.advance_deducted
-        wo.total_delivered_value += self.total_amount
-        wo.save()
-
-    @transaction.atomic
-    def deduct_stock(self):
-        """Deduct stock for all delivered items."""
-        for bill_item in self.items.all():
-            if bill_item.product:
-                product = bill_item.product
-                product.current_stock -= bill_item.delivered_quantity
-                product.save()
-
-                wo_item = bill_item.work_order_item
-                wo_item.delivered_quantity += bill_item.delivered_quantity
-                wo_item.save()
-
-        self.work_order.update_status()
-
-    @transaction.atomic
-    def restore_stock(self):
-        """Restore stock if bill is cancelled."""
-        for bill_item in self.items.all():
-            if bill_item.product:
-                product = bill_item.product
-                product.current_stock += bill_item.delivered_quantity
-                product.save()
-
-                wo_item = bill_item.work_order_item
-                wo_item.delivered_quantity -= bill_item.delivered_quantity
-                wo_item.save()
-
-        wo = self.work_order
-        wo.advance_deducted      -= self.advance_deducted
-        wo.total_delivered_value -= self.total_amount
-        wo.save()
-
-        wo.update_status()
 
     def __str__(self):
         return f"{self.bill_number} - {self.client_name}"
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-
-class BillItem(models.Model):
-    """Bill Items - Items delivered in this bill."""
-
+class PIBillItem(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-
-    bill = models.ForeignKey(Bill, on_delete=models.CASCADE, related_name='items')
-    work_order_item = models.ForeignKey(WorkOrderItem, on_delete=models.PROTECT,
-                                        help_text="Reference to work order item")
+    pi_bill = models.ForeignKey(PIBill, on_delete=models.CASCADE, related_name='pi_bill_items')
+    pi_item = models.ForeignKey(ProformaInvoiceItem, on_delete=models.PROTECT, null=True, blank=True)
     product = models.ForeignKey(Product, on_delete=models.PROTECT, null=True, blank=True)
 
-    item_code   = models.CharField(max_length=50)
     item_name   = models.CharField(max_length=200)
-    description = models.TextField(blank=True)
-    hsn_code    = models.CharField(max_length=20, blank=True)
+    hsn_code    = models.CharField(max_length=50, blank=True)
     unit        = models.CharField(max_length=20, default='PCS')
-
-    ordered_quantity = models.DecimalField(max_digits=10, decimal_places=2,
-                                           help_text="Total quantity in work order")
-    previously_delivered_quantity = models.DecimalField(max_digits=10, decimal_places=2, default=0,
-                                                        help_text="Quantity delivered in previous bills")
-    delivered_quantity = models.DecimalField(max_digits=10, decimal_places=2,
-                                             help_text="Quantity delivered in THIS bill")
-    pending_quantity = models.DecimalField(max_digits=10, decimal_places=2, default=0,
-                                           help_text="Remaining quantity after this bill")
-
-    rate   = models.DecimalField(max_digits=10, decimal_places=2, help_text="Rate per unit (INR)")
-    amount = models.DecimalField(max_digits=12, decimal_places=2, help_text="delivered_quantity × rate (INR)")
-
-    # ── Original currency amounts ────────────────────────────────────────
-    original_rate = models.DecimalField(
-        max_digits=10, decimal_places=2, default=0,
-        help_text="Rate in original currency"
-    )
-    original_amount = models.DecimalField(
-        max_digits=12, decimal_places=2, default=0,
-        help_text="Amount in original currency"
-    )
-
-    remarks = models.TextField(blank=True)
+    quantity    = models.DecimalField(max_digits=10, decimal_places=2)
+    rate        = models.DecimalField(max_digits=10, decimal_places=2)
+    amount      = models.DecimalField(max_digits=12, decimal_places=2, default=0)
 
     class Meta:
-        db_table = 'bill_items'
-        verbose_name = 'Bill Item'
-        verbose_name_plural = 'Bill Items'
+        db_table = 'pi_bill_items'
 
     def save(self, *args, **kwargs):
-        wo_item = self.work_order_item
-        self.product      = wo_item.product
-        self.item_code    = wo_item.item_code
-        self.item_name    = wo_item.item_name
-        self.description  = wo_item.description
-        self.hsn_code     = wo_item.hsn_code
-        self.unit         = wo_item.unit
-        self.rate         = wo_item.rate
-        self.ordered_quantity              = wo_item.ordered_quantity
-        self.previously_delivered_quantity = wo_item.delivered_quantity
-
-        self.amount           = self.delivered_quantity * self.rate
-        total_delivered       = self.previously_delivered_quantity + self.delivered_quantity
-        self.pending_quantity = self.ordered_quantity - total_delivered
-
-        self.original_rate = wo_item.original_rate
-        self.original_amount = self.delivered_quantity * self.original_rate
-
+        self.amount = Decimal(str(self.quantity)) * Decimal(str(self.rate))
         super().save(*args, **kwargs)
 
     def __str__(self):
-        return f"{self.bill.bill_number} - {self.item_name}"
+        return f"{self.pi_bill.bill_number} - {self.item_name}"
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-
-class BillPayment(models.Model):
-    """Individual payment transaction for a bill."""
-
+class PIBillPayment(models.Model):
     PAYMENT_MODE_CHOICES = [
         ('CASH',   'Cash'),
         ('CHEQUE', 'Cheque'),
@@ -406,39 +139,36 @@ class BillPayment(models.Model):
         ('RTGS',   'RTGS'),
         ('IMPS',   'IMPS'),
         ('UPI',    'UPI'),
+        ('LC',     'Letter of Credit'),
+        ('TT',     'Telegraphic Transfer'),
         ('OTHER',  'Other'),
     ]
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
 
-    bill = models.ForeignKey(Bill, on_delete=models.CASCADE, related_name='payments',
-                              help_text="Bill this payment belongs to")
-
-    payment_number = models.PositiveIntegerField(
-        help_text="Sequential payment number for this bill"
+    pi_bill = models.ForeignKey(
+        PIBill, on_delete=models.CASCADE, related_name='payments',
     )
-    amount = models.DecimalField(max_digits=12, decimal_places=2,
-                                  help_text="Amount paid in this transaction (INR)")
-    payment_date  = models.DateField(help_text="Date on which payment was received")
-    payment_mode  = models.CharField(max_length=20, choices=PAYMENT_MODE_CHOICES, default='CASH')
-    reference_number = models.CharField(max_length=100, blank=True,
-                                        help_text="Cheque number / UTR / SWIFT reference")
+
+    payment_number = models.PositiveIntegerField()
+    amount = models.DecimalField(max_digits=12, decimal_places=2)
+    payment_date = models.DateField()
+    payment_mode = models.CharField(max_length=20, choices=PAYMENT_MODE_CHOICES, default='NEFT')
+    reference_number = models.CharField(max_length=100, blank=True)
     remarks = models.TextField(blank=True)
 
-    # Running-total snapshot
-    total_paid_after = models.DecimalField(max_digits=12, decimal_places=2,
-                                            help_text="Cumulative amount_paid AFTER this transaction (INR)")
-    balance_after    = models.DecimalField(max_digits=12, decimal_places=2,
-                                            help_text="Remaining balance AFTER this transaction (INR)")
+    total_paid_after = models.DecimalField(max_digits=12, decimal_places=2)
+    balance_after = models.DecimalField(max_digits=12, decimal_places=2)
 
-    recorded_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT)
-    created_at  = models.DateTimeField(auto_now_add=True)
+    recorded_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
+        related_name='pi_bill_payments_recorded',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
-        db_table      = 'bill_payments'
-        ordering      = ['bill', 'payment_number']
-        verbose_name  = 'Bill Payment'
-        verbose_name_plural = 'Bill Payments'
+        db_table = 'pi_bill_payments'
+        ordering = ['pi_bill', 'payment_number']
 
     def __str__(self):
-        return f"{self.bill.bill_number} – Payment #{self.payment_number} – ₹{self.amount}"
+        return f"{self.pi_bill.bill_number} – Payment #{self.payment_number} – {self.amount}"

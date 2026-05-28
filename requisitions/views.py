@@ -87,27 +87,25 @@ class RequisitionViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['get'])
     def comparison(self, request, pk=None):
-        """Compare all vendor quotations for this requisition"""
+        """
+        Compare vendor quotations for this requisition.
+        All vendors shown together — currency displayed per vendor.
+        """
         requisition = self.get_object()
         assignments = VendorRequisitionAssignment.objects.filter(
             requisition=requisition
         ).select_related('vendor').prefetch_related(
             'quotations__items__product'
         )
-        comparison_data = {
-            'requisition_number': requisition.requisition_number,
-            'requisition_date': requisition.requisition_date,
-            'vendors': []
-        }
+
+        vendors = []
         for assignment in assignments:
-            vendor_info = {
-                'vendor_id': assignment.vendor.id,
-                'vendor_name': assignment.vendor.vendor_name,
-                'vendor_code': assignment.vendor.vendor_code,
-                'quotations': []
-            }
             for quotation in assignment.quotations.all():
-                quotation_info = {
+                vendor_info = {
+                    'vendor_id': assignment.vendor.id,
+                    'vendor_name': assignment.vendor.vendor_name,
+                    'vendor_code': assignment.vendor.vendor_code,
+                    'currency': quotation.currency,
                     'quotation_number': quotation.quotation_number,
                     'quotation_date': quotation.quotation_date,
                     'total_amount': quotation.total_amount,
@@ -115,7 +113,7 @@ class RequisitionViewSet(viewsets.ModelViewSet):
                     'items': []
                 }
                 for item in quotation.items.all():
-                    quotation_info['items'].append({
+                    vendor_info['items'].append({
                         'id': str(item.id),
                         'product_code': item.product.item_code,
                         'product_name': item.product.item_name,
@@ -124,9 +122,13 @@ class RequisitionViewSet(viewsets.ModelViewSet):
                         'quoted_rate': item.quoted_rate,
                         'amount': item.amount
                     })
-                vendor_info['quotations'].append(quotation_info)
-            comparison_data['vendors'].append(vendor_info)
-        return Response(comparison_data)
+                vendors.append(vendor_info)
+
+        return Response({
+            'requisition_number': requisition.requisition_number,
+            'requisition_date': requisition.requisition_date,
+            'vendors': vendors,
+        })
 
 
 # ====================== VendorAssignmentViewSet ======================

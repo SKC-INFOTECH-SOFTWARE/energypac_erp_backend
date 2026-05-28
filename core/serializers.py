@@ -1,5 +1,15 @@
 from rest_framework import serializers
-from .models import ExchangeRate
+from .models import Currency, ExchangeRate
+
+
+class CurrencySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Currency
+        fields = ['id', 'code', 'name', 'symbol', 'is_active', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'created_at', 'updated_at']
+
+    def validate_code(self, value):
+        return value.upper().strip()
 
 
 class ExchangeRateSerializer(serializers.ModelSerializer):
