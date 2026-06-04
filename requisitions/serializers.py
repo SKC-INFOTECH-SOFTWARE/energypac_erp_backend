@@ -67,13 +67,8 @@ class RequisitionCreateSerializer(serializers.ModelSerializer):
             validated_data['requisition_number'] = req_number
         requisition = Requisition.objects.create(**validated_data)
 
-        from inventory.models import Product
         for item_data in items_data:
             RequisitionItem.objects.create(requisition=requisition, **item_data)
-            product = item_data.get('product')
-            if product and not product.requisition_number:
-                product.requisition_number = requisition.requisition_number
-                product.save(update_fields=['requisition_number'])
 
         return requisition
 

@@ -11,7 +11,8 @@ class Vendor(models.Model):
     contact_person = models.CharField(max_length=100, blank=True,
                                       help_text="Primary contact person")
     phone = models.CharField(max_length=15, blank=True,
-                            help_text="Contact phone number")
+                            help_text="Contact phone number") 
+    
     email = models.EmailField(blank=True,
                               help_text="Contact email")
     address = models.TextField(blank=True,

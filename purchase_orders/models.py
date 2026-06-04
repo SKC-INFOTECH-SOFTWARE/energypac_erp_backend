@@ -267,12 +267,16 @@ class PurchaseOrderItem(models.Model):
         self.po from DB so any caller holding this item's .po reference
         sees the final correct status immediately.
         """
+        from datetime import date
+
         if self.po.status == 'CANCELLED':
             raise ValueError("Cannot receive items on a cancelled purchase order.")
 
         if not self.is_received:
             self.product.current_stock += self.quantity
             self.product.purchase_count += 1
+            self.product.last_purchase_date = date.today()
+            self.product.requisition_number = self.po.requisition.requisition_number
             self.product.save()
 
             self.is_received = True

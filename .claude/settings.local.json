@@ -40,7 +40,11 @@
       "PowerShell(D:\\\\energypac\\\\venv\\\\Scripts\\\\python.exe D:\\\\energypac\\\\manage.py makemigrations audit_logs --no-color)",
       "PowerShell(D:\\\\energypac\\\\venv\\\\Scripts\\\\python.exe D:\\\\energypac\\\\manage.py migrate --no-color)",
       "PowerShell(D:\\\\energypac\\\\venv\\\\Scripts\\\\python.exe D:\\\\energypac\\\\manage.py makemigrations billing --no-color)",
-      "PowerShell(D:\\\\energypac\\\\venv\\\\Scripts\\\\python.exe -c \"import os, django; os.environ['DJANGO_SETTINGS_MODULE']='erp_energypac.settings'; django.setup\\(\\); from accounts.models import User, UserModulePermission; admins = User.objects.filter\\(role='ADMIN'\\); [print\\(u.username, UserModulePermission.objects.get_or_create\\(user=u, module='TRANSPORT', defaults={'can_read': True, 'can_write': True}\\)[1]\\) for u in admins]\")"
+      "PowerShell(D:\\\\energypac\\\\venv\\\\Scripts\\\\python.exe -c \"import os, django; os.environ['DJANGO_SETTINGS_MODULE']='erp_energypac.settings'; django.setup\\(\\); from accounts.models import User, UserModulePermission; admins = User.objects.filter\\(role='ADMIN'\\); [print\\(u.username, UserModulePermission.objects.get_or_create\\(user=u, module='TRANSPORT', defaults={'can_read': True, 'can_write': True}\\)[1]\\) for u in admins]\")",
+      "PowerShell(D:\\\\energypac\\\\venv\\\\Scripts\\\\python.exe D:\\\\energypac\\\\manage.py check --deploy 2>&1 | Select-Object -Last 20)",
+      "PowerShell(D:\\\\energypac\\\\venv\\\\Scripts\\\\python.exe D:\\\\energypac\\\\manage.py makemigrations --check --dry-run 2>&1)",
+      "PowerShell(D:\\\\energypac\\\\venv\\\\Scripts\\\\python.exe D:\\\\energypac\\\\manage.py makemigrations 2>&1)",
+      "PowerShell(D:\\\\energypac\\\\venv\\\\Scripts\\\\python.exe D:\\\\energypac\\\\manage.py migrate 2>&1)"
     ]
   }
 }

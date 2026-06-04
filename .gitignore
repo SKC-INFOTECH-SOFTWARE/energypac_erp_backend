@@ -12,6 +12,7 @@ ENV/
 env.bak/
 venv.bak/
 client
+frontend/
 
 # ===============================
 # DJANGO

@@ -594,6 +594,8 @@ class ProformaInvoiceCreateSerializer(serializers.Serializer):
         return value
 
     def create(self, validated_data):
+        from datetime import date
+
         items_data  = validated_data.pop('items')
         requisition = Requisition.objects.get(id=validated_data.pop('requisition'))
         created_by  = validated_data.pop('created_by')
@@ -619,6 +621,10 @@ class ProformaInvoiceCreateSerializer(serializers.Serializer):
                     quantity=item_data['quantity'],
                     unit_price=item_data['unit_price'],
                 )
+
+                product.sale_count += 1
+                product.last_sale_date = date.today()
+                product.save()
 
             pi.calculate_total()
 

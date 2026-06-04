@@ -9,10 +9,10 @@ Header: `Authorization: Bearer <access_token>`
 ## Complete Business Flow
 
 ```
-┌─────────────────────────────────────────────────────────────────────────────┐
+┌────────────────────────────────────────────────────────────────────────────┐
 │                         EnergyPac ERP Flow                                 │
 │                                                                            │
-│  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐                  │
+│  ┌──────────────┐    ┌──────────────┐  ┌──────────────┐                  │
 │  │  Client Query │───▶│    Sales     │───▶│  Requisition │                  │
 │  │  (Lead Entry) │    │  Quotation   │    │(Items Needed)│                  │
 │  └──────────────┘    └──────────────┘    └──────┬───────┘                  │
@@ -1451,3 +1451,6 @@ ACTIVE → FULLY_USED
 | 1 | `/api/docs` | GET | Swagger UI — interactive API explorer |
 | 2 | `/api/playground` | GET | Redoc — formatted API reference |
 | 3 | `/api/schema/` | GET | OpenAPI 3.0 JSON schema |
+
+
+
