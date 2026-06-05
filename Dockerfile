@@ -33,7 +33,7 @@ COPY . .
 # ---------------------------------------
 # Create staticfiles & collect static
 # ---------------------------------------
-RUN mkdir -p /app/staticfiles && \
+RUN mkdir -p /app/staticfiles /app/client && \
     python manage.py collectstatic --noinput
 
 # ---------------------------------------

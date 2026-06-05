@@ -7,9 +7,14 @@ services:
     network_mode: host
     env_file:
       - .env
+    volumes:
+      - uploads:/app/client
     restart: always
     deploy:
       resources:
         limits:
           cpus: '0.50'
           memory: 2G
+
+volumes:
+  uploads:
