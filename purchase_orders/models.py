@@ -214,6 +214,7 @@ class PurchaseOrder(models.Model):
             if item.is_received:
                 item.product.current_stock -= item.quantity
                 item.product.purchase_count = max(item.product.purchase_count - 1, 0)
+                item.product.total_purchased_qty = max(item.product.total_purchased_qty - item.quantity, 0)
                 item.product.save()
 
                 item.is_received = False
@@ -275,6 +276,7 @@ class PurchaseOrderItem(models.Model):
         if not self.is_received:
             self.product.current_stock += self.quantity
             self.product.purchase_count += 1
+            self.product.total_purchased_qty += self.quantity
             self.product.last_purchase_date = date.today()
             self.product.requisition_number = self.po.requisition.requisition_number
             self.product.save()

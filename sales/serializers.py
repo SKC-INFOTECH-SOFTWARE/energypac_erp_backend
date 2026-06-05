@@ -623,6 +623,7 @@ class ProformaInvoiceCreateSerializer(serializers.Serializer):
                 )
 
                 product.sale_count += 1
+                product.total_sold_qty += item_data['quantity']
                 product.last_sale_date = date.today()
                 product.save()
 

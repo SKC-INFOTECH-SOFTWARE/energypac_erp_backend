@@ -44,7 +44,10 @@
       "PowerShell(D:\\\\energypac\\\\venv\\\\Scripts\\\\python.exe D:\\\\energypac\\\\manage.py check --deploy 2>&1 | Select-Object -Last 20)",
       "PowerShell(D:\\\\energypac\\\\venv\\\\Scripts\\\\python.exe D:\\\\energypac\\\\manage.py makemigrations --check --dry-run 2>&1)",
       "PowerShell(D:\\\\energypac\\\\venv\\\\Scripts\\\\python.exe D:\\\\energypac\\\\manage.py makemigrations 2>&1)",
-      "PowerShell(D:\\\\energypac\\\\venv\\\\Scripts\\\\python.exe D:\\\\energypac\\\\manage.py migrate 2>&1)"
+      "PowerShell(D:\\\\energypac\\\\venv\\\\Scripts\\\\python.exe D:\\\\energypac\\\\manage.py migrate 2>&1)",
+      "PowerShell(D:\\\\energypac\\\\venv\\\\Scripts\\\\python.exe D:\\\\energypac\\\\manage.py makemigrations inventory 2>&1)",
+      "PowerShell(try { $r = Invoke-WebRequest -Uri \"http://localhost:8000/api/auth/login\" -Method POST -ContentType \"application/json\" -Body '{\"employee_code\":\"test\",\"password\":\"test\"}' -ErrorAction Stop; $r.StatusCode } catch { $_.Exception.Response.StatusCode.value__ })",
+      "PowerShell(Set-Content *)"
     ]
   }
 }

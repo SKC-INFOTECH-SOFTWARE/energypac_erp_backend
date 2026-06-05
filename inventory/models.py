@@ -29,9 +29,17 @@ class Product(models.Model):
         default=0,
         help_text="How many times this item has been purchased (received in PO)"
     )
+    total_purchased_qty = models.DecimalField(
+        max_digits=12, decimal_places=2, default=0,
+        help_text="Total quantity purchased across all POs"
+    )
     sale_count = models.PositiveIntegerField(
         default=0,
         help_text="How many times this item has been sold (via PI)"
+    )
+    total_sold_qty = models.DecimalField(
+        max_digits=12, decimal_places=2, default=0,
+        help_text="Total quantity sold across all PIs"
     )
     last_purchase_date = models.DateField(
         null=True, blank=True,
