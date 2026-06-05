@@ -47,7 +47,8 @@
       "PowerShell(D:\\\\energypac\\\\venv\\\\Scripts\\\\python.exe D:\\\\energypac\\\\manage.py migrate 2>&1)",
       "PowerShell(D:\\\\energypac\\\\venv\\\\Scripts\\\\python.exe D:\\\\energypac\\\\manage.py makemigrations inventory 2>&1)",
       "PowerShell(try { $r = Invoke-WebRequest -Uri \"http://localhost:8000/api/auth/login\" -Method POST -ContentType \"application/json\" -Body '{\"employee_code\":\"test\",\"password\":\"test\"}' -ErrorAction Stop; $r.StatusCode } catch { $_.Exception.Response.StatusCode.value__ })",
-      "PowerShell(Set-Content *)"
+      "PowerShell(Set-Content *)",
+      "PowerShell(if \\(-not \\(Test-Path \"D:\\\\energypac\\\\client\"\\)\\) { New-Item -ItemType Directory -Path \"D:\\\\energypac\\\\client\" -Force })"
     ]
   }
 }
