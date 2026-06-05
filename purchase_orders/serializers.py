@@ -229,6 +229,10 @@ class GeneratePOSerializer(serializers.Serializer):
             q_item = VendorQuotationItem.objects.select_related(
                 'quotation__assignment__vendor', 'product'
             ).get(id=item_id)
+            if not q_item.quotation or not q_item.quotation.assignment:
+                raise serializers.ValidationError(
+                    f"Quotation item {item_id} has no valid quotation or vendor assignment"
+                )
             vendor = q_item.quotation.assignment.vendor
             vendor_groups[vendor.id].append(q_item)
 

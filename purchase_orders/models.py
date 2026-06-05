@@ -138,7 +138,10 @@ class PurchaseOrder(models.Model):
             if last_po:
                 num_part = last_po.po_number.split('/')[-1]
                 num_part = num_part.rstrip('R')
-                new_num = int(num_part) + 1
+                try:
+                    new_num = int(num_part) + 1
+                except ValueError:
+                    new_num = 100
             else:
                 new_num = 100
 
@@ -148,20 +151,23 @@ class PurchaseOrder(models.Model):
 
     def calculate_total(self):
         """Recalculate items_total, GST, total_amount, and balance."""
-        self.items_total = sum(item.amount for item in self.items.all())
+        self.items_total = sum(
+            (item.amount or Decimal('0') for item in self.items.all()),
+            Decimal('0')
+        )
 
-        self.cgst_amount = (self.items_total * self.cgst_percentage) / Decimal('100')
-        self.sgst_amount = (self.items_total * self.sgst_percentage) / Decimal('100')
-        self.igst_amount = (self.items_total * self.igst_percentage) / Decimal('100')
+        self.cgst_amount = (self.items_total * (self.cgst_percentage or Decimal('0'))) / Decimal('100')
+        self.sgst_amount = (self.items_total * (self.sgst_percentage or Decimal('0'))) / Decimal('100')
+        self.igst_amount = (self.items_total * (self.igst_percentage or Decimal('0'))) / Decimal('100')
 
         self.total_amount = (
             self.items_total
             + self.cgst_amount
             + self.sgst_amount
             + self.igst_amount
-            - self.discount_amount
+            - (self.discount_amount or Decimal('0'))
         )
-        self.balance = self.total_amount - self.amount_paid
+        self.balance = self.total_amount - (self.amount_paid or Decimal('0'))
         self.save()
 
     def update_status(self):
@@ -257,7 +263,9 @@ class PurchaseOrderItem(models.Model):
 
     def save(self, *args, **kwargs):
         from decimal import Decimal
-        self.amount = Decimal(str(self.quantity)) * Decimal(str(self.rate))
+        qty = Decimal(str(self.quantity or 0))
+        rate = Decimal(str(self.rate or 0))
+        self.amount = qty * rate
         super().save(*args, **kwargs)
 
     def mark_as_purchased(self):

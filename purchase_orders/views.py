@@ -46,9 +46,20 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
             "selections":  ["quotation-item-uuid-1", "quotation-item-uuid-2"]
         }
         """
+        import logging
+        logger = logging.getLogger(__name__)
+
         serializer = GeneratePOSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        pos = serializer.save(created_by=request.user)
+
+        try:
+            pos = serializer.save(created_by=request.user)
+        except Exception as e:
+            logger.exception("PO generation failed")
+            return Response(
+                {'error': f'PO generation failed: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
 
         for po in pos:
             AuditLog.log(request.user, 'CREATE', po, {
