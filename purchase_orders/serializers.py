@@ -102,6 +102,7 @@ class PurchaseOrderUpdateSerializer(serializers.ModelSerializer):
         fields = [
             'po_date', 'subject', 'project_name', 'bill_to', 'ship_to',
             'terms_and_conditions', 'remarks', 'payment_due_date',
+            'conversion_rate',
             'discount_amount',
             'cgst_percentage', 'sgst_percentage', 'igst_percentage',
             'items',
