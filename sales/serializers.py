@@ -1,5 +1,5 @@
 from django.conf import settings
-from django.db import transaction
+from django.db import models, transaction
 from rest_framework import serializers
 from .models import ClientQuery, SalesQuotation, SalesQuotationItem, ProformaInvoice, ProformaInvoiceItem
 from inventory.models import Product
@@ -478,6 +478,11 @@ class PIItemSerializer(serializers.ModelSerializer):
     def get_purchase_status(self, obj):
         from purchase_orders.models import PurchaseOrderItem
         pi = obj.proforma_invoice
+        if not pi.requisition:
+            po_item = PurchaseOrderItem.objects.filter(
+                product=obj.product, is_received=True,
+            ).exclude(po__status='CANCELLED').first()
+            return 'STOCK_SALE' if po_item else 'STOCK_SALE'
         po_item = PurchaseOrderItem.objects.filter(
             po__requisition=pi.requisition,
             product=obj.product,
@@ -489,7 +494,8 @@ class PIItemSerializer(serializers.ModelSerializer):
 
 class ProformaInvoiceSerializer(serializers.ModelSerializer):
     items              = PIItemSerializer(many=True, read_only=True)
-    requisition_number = serializers.CharField(source='requisition.requisition_number', read_only=True)
+    requisition_number = serializers.SerializerMethodField()
+    is_stock_sale      = serializers.SerializerMethodField()
     created_by_name    = serializers.CharField(source='created_by.get_full_name', read_only=True)
     locked_by_name     = serializers.SerializerMethodField()
 
@@ -497,6 +503,7 @@ class ProformaInvoiceSerializer(serializers.ModelSerializer):
         model  = ProformaInvoice
         fields = [
             'id', 'pi_number', 'requisition', 'requisition_number',
+            'is_stock_sale',
             'pi_date', 'currency', 'conversion_rate', 'payment_due_date',
             'lc_number', 'exporter_beneficiary', 'exporter_reference',
             'gst_number', 'consignee', 'applicant_importer',
@@ -520,6 +527,14 @@ class ProformaInvoiceSerializer(serializers.ModelSerializer):
             'created_at', 'updated_at',
         ]
 
+    def get_requisition_number(self, obj):
+        if obj.requisition:
+            return obj.requisition.requisition_number
+        return None
+
+    def get_is_stock_sale(self, obj):
+        return obj.requisition is None
+
     def get_locked_by_name(self, obj):
         if obj.locked_by:
             return obj.locked_by.get_full_name()
@@ -536,7 +551,7 @@ class PIItemCreateSerializer(serializers.Serializer):
 
 
 class ProformaInvoiceCreateSerializer(serializers.Serializer):
-    requisition = serializers.UUIDField()
+    requisition = serializers.UUIDField(required=False, allow_null=True)
     pi_date     = serializers.DateField()
     currency    = serializers.CharField(default='INR')
     conversion_rate = serializers.DecimalField(max_digits=10, decimal_places=4, required=False, allow_null=True)
@@ -561,26 +576,12 @@ class ProformaInvoiceCreateSerializer(serializers.Serializer):
     notes                = serializers.CharField(required=False, allow_blank=True, default='')
 
     def validate_requisition(self, value):
+        if value is None:
+            return value
         try:
-            requisition = Requisition.objects.get(id=value)
+            Requisition.objects.get(id=value)
         except Requisition.DoesNotExist:
             raise serializers.ValidationError("Requisition not found")
-
-        from purchase_orders.models import PurchaseOrderItem
-        pending_items = []
-        for ri in requisition.items.select_related('product').all():
-            has_po = PurchaseOrderItem.objects.filter(
-                po__requisition=requisition, product=ri.product,
-            ).exclude(po__status='CANCELLED').exists()
-            if not has_po:
-                pending_items.append(ri.product.item_name)
-
-        if pending_items:
-            raise serializers.ValidationError(
-                f"PO not generated for: {', '.join(pending_items)}. "
-                "All requisition items must have a PO before creating PI."
-            )
-
         return value
 
     def validate_items(self, value):
@@ -593,11 +594,91 @@ class ProformaInvoiceCreateSerializer(serializers.Serializer):
                 raise serializers.ValidationError(f"Product {item['product']} not found")
         return value
 
-    def create(self, validated_data):
-        from datetime import date
+    def validate(self, data):
+        from purchase_orders.models import PurchaseOrderItem
+        from .models import ProformaInvoiceItem
 
+        requisition_id = data.get('requisition')
+        items = data.get('items', [])
+
+        if requisition_id:
+            not_purchased = []
+            already_in_pi = []
+            for item in items:
+                product = Product.objects.get(id=item['product'])
+
+                is_purchased = PurchaseOrderItem.objects.filter(
+                    po__requisition_id=requisition_id,
+                    product=product,
+                    is_received=True,
+                ).exclude(po__status='CANCELLED').exists()
+                if not is_purchased:
+                    has_po = PurchaseOrderItem.objects.filter(
+                        po__requisition_id=requisition_id,
+                        product=product,
+                    ).exclude(po__status='CANCELLED').exists()
+                    if not has_po:
+                        not_purchased.append(f"{product.item_name} (PO not generated)")
+                    else:
+                        not_purchased.append(f"{product.item_name} (not yet received/purchased)")
+                    continue
+
+                existing_pi_qty = ProformaInvoiceItem.objects.filter(
+                    proforma_invoice__requisition_id=requisition_id,
+                    product=product,
+                ).exclude(
+                    proforma_invoice__status='CANCELLED'
+                ).values_list('quantity', flat=True)
+                total_already = sum(existing_pi_qty)
+
+                purchased_qty = PurchaseOrderItem.objects.filter(
+                    po__requisition_id=requisition_id,
+                    product=product,
+                    is_received=True,
+                ).exclude(po__status='CANCELLED').aggregate(
+                    total=models.Sum('quantity')
+                )['total'] or Decimal('0')
+
+                remaining = purchased_qty - total_already
+                requested = Decimal(str(item['quantity']))
+                if requested > remaining:
+                    if remaining <= 0:
+                        already_in_pi.append(
+                            f"{product.item_name} (already fully covered in other PI)"
+                        )
+                    else:
+                        already_in_pi.append(
+                            f"{product.item_name} (only {remaining} left, requested {requested})"
+                        )
+
+            errors = []
+            if not_purchased:
+                errors.append(f"Not purchased: {', '.join(not_purchased)}")
+            if already_in_pi:
+                errors.append(f"Duplicate/over-allocation: {', '.join(already_in_pi)}")
+            if errors:
+                raise serializers.ValidationError({
+                    'items': ' | '.join(errors)
+                })
+        else:
+            insufficient_stock = []
+            for item in items:
+                product = Product.objects.get(id=item['product'])
+                if product.current_stock < Decimal(str(item['quantity'])):
+                    insufficient_stock.append(
+                        f"{product.item_name} (stock: {product.current_stock}, requested: {item['quantity']})"
+                    )
+            if insufficient_stock:
+                raise serializers.ValidationError({
+                    'items': f"Insufficient stock for direct sale: {', '.join(insufficient_stock)}"
+                })
+
+        return data
+
+    def create(self, validated_data):
         items_data  = validated_data.pop('items')
-        requisition = Requisition.objects.get(id=validated_data.pop('requisition'))
+        requisition_id = validated_data.pop('requisition', None)
+        requisition = Requisition.objects.get(id=requisition_id) if requisition_id else None
         created_by  = validated_data.pop('created_by')
 
         with transaction.atomic():
@@ -609,9 +690,11 @@ class ProformaInvoiceCreateSerializer(serializers.Serializer):
 
             for item_data in items_data:
                 product = Product.objects.get(id=item_data['product'])
-                req_item = RequisitionItem.objects.filter(
-                    requisition=requisition, product=product
-                ).first()
+                req_item = None
+                if requisition:
+                    req_item = RequisitionItem.objects.filter(
+                        requisition=requisition, product=product
+                    ).first()
 
                 ProformaInvoiceItem.objects.create(
                     proforma_invoice=pi,
@@ -621,11 +704,6 @@ class ProformaInvoiceCreateSerializer(serializers.Serializer):
                     quantity=item_data['quantity'],
                     unit_price=item_data['unit_price'],
                 )
-
-                product.sale_count += 1
-                product.total_sold_qty += item_data['quantity']
-                product.last_sale_date = date.today()
-                product.save()
 
             pi.calculate_total()
 

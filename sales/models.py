@@ -22,7 +22,7 @@ class ProformaInvoice(models.Model):
 
     id         = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     pi_number  = models.CharField(max_length=50, unique=True, editable=False)
-    requisition = models.ForeignKey(Requisition, on_delete=models.PROTECT, related_name='proforma_invoices')
+    requisition = models.ForeignKey(Requisition, on_delete=models.PROTECT, related_name='proforma_invoices', null=True, blank=True)
     pi_date    = models.DateField()
     currency   = models.CharField(max_length=10, default='INR')
 

@@ -425,7 +425,7 @@ class PIFinanceViewSet(viewsets.ReadOnlyModelViewSet):
             results.append({
                 'pi_id': str(pi.id),
                 'pi_number': pi.pi_number,
-                'requisition_number': pi.requisition.requisition_number,
+                'requisition_number': pi.requisition.requisition_number if pi.requisition else 'STOCK SALE',
                 'currency': pi.currency,
                 'grand_total': float(pi.grand_total),
                 'amount_received': float(pi.amount_received),
@@ -563,9 +563,22 @@ class ProfitLossReportView(APIView):
 
     def get(self, request):
         req_id = request.query_params.get('requisition')
+        fy = request.query_params.get('fy')
+
         requisitions = Requisition.objects.all()
         if req_id:
             requisitions = requisitions.filter(id=req_id)
+        if fy:
+            try:
+                fy_start_year = int(fy.split('-')[0])
+                fy_start = date_type(fy_start_year, 4, 1)
+                fy_end = date_type(fy_start_year + 1, 3, 31)
+                requisitions = requisitions.filter(
+                    requisition_date__gte=fy_start,
+                    requisition_date__lte=fy_end
+                )
+            except (ValueError, IndexError):
+                pass
 
         results = []
         for req in requisitions:
@@ -614,6 +627,7 @@ class ProfitLossReportView(APIView):
             results.append({
                 'requisition_id': str(req.id),
                 'requisition_number': req.requisition_number,
+                'requisition_date': req.requisition_date.isoformat() if req.requisition_date else None,
                 'purchase_cost_inr': float(po_total_inr),
                 'transport_cost_inr': float(transport_total),
                 'total_cost_inr': float(total_cost),
@@ -621,6 +635,53 @@ class ProfitLossReportView(APIView):
                 'profit_loss_inr': float(profit_loss),
                 'margin_percentage': round(float(margin), 2),
                 'alert': alert,
+                'is_stock_sale': False,
+            })
+
+        stock_sale_pis = ProformaInvoice.objects.filter(
+            requisition__isnull=True
+        ).exclude(status='CANCELLED')
+        if fy:
+            try:
+                fy_start_year = int(fy.split('-')[0])
+                fy_start = date_type(fy_start_year, 4, 1)
+                fy_end = date_type(fy_start_year + 1, 3, 31)
+                stock_sale_pis = stock_sale_pis.filter(
+                    pi_date__gte=fy_start, pi_date__lte=fy_end
+                )
+            except (ValueError, IndexError):
+                pass
+
+        if stock_sale_pis.exists():
+            stock_revenue_inr = Decimal('0')
+            stock_cost_inr = Decimal('0')
+            for pi in stock_sale_pis:
+                pi_rev = _to_inr(pi.grand_total, pi.currency, pi.conversion_rate)
+                stock_revenue_inr += pi_rev
+                for pii in pi.items.select_related('product').all():
+                    last_purchase = PurchaseOrderItem.objects.filter(
+                        product=pii.product, is_received=True,
+                    ).exclude(po__status='CANCELLED').select_related('po').order_by('-po__po_date').first()
+                    if last_purchase:
+                        rate = last_purchase.po.conversion_rate or Decimal('1')
+                        if last_purchase.po.currency == 'INR':
+                            rate = Decimal('1')
+                        stock_cost_inr += last_purchase.rate * pii.quantity * rate
+
+            stock_pl = stock_revenue_inr - stock_cost_inr
+            stock_margin = (stock_pl / stock_revenue_inr * 100) if stock_revenue_inr > 0 else Decimal('0')
+            results.append({
+                'requisition_id': None,
+                'requisition_number': 'STOCK SALES',
+                'requisition_date': None,
+                'purchase_cost_inr': float(stock_cost_inr),
+                'transport_cost_inr': 0,
+                'total_cost_inr': float(stock_cost_inr),
+                'sales_revenue_inr': float(stock_revenue_inr),
+                'profit_loss_inr': float(stock_pl),
+                'margin_percentage': round(float(stock_margin), 2),
+                'alert': 'LOSS' if stock_pl < 0 else ('LOW_MARGIN' if stock_margin < 10 else None),
+                'is_stock_sale': True,
             })
 
         total_cost_all = sum(r['total_cost_inr'] for r in results)
@@ -695,11 +756,20 @@ class ProfitLossItemReportView(APIView):
                     'unit': poi.product.unit,
                     'purchase_qty': Decimal('0'),
                     'purchase_amount_inr': Decimal('0'),
+                    'purchase_amount_original': Decimal('0'),
+                    'purchase_currency': 'INR',
+                    'purchase_conversion_rate': float(rate),
                     'selling_qty': Decimal('0'),
                     'selling_amount_inr': Decimal('0'),
+                    'selling_amount_original': Decimal('0'),
+                    'selling_currency': 'INR',
+                    'selling_conversion_rate': 1,
                 }
             product_data[pid]['purchase_qty'] += poi.quantity
             product_data[pid]['purchase_amount_inr'] += item_inr
+            product_data[pid]['purchase_amount_original'] += poi.amount
+            product_data[pid]['purchase_currency'] = poi.po.currency
+            product_data[pid]['purchase_conversion_rate'] = float(rate)
 
         for pii in pi_items:
             rate = pii.proforma_invoice.conversion_rate or Decimal('1')
@@ -716,11 +786,20 @@ class ProfitLossItemReportView(APIView):
                     'unit': pii.product.unit,
                     'purchase_qty': Decimal('0'),
                     'purchase_amount_inr': Decimal('0'),
+                    'purchase_amount_original': Decimal('0'),
+                    'purchase_currency': 'INR',
+                    'purchase_conversion_rate': 1,
                     'selling_qty': Decimal('0'),
                     'selling_amount_inr': Decimal('0'),
+                    'selling_amount_original': Decimal('0'),
+                    'selling_currency': 'INR',
+                    'selling_conversion_rate': 1,
                 }
             product_data[pid]['selling_qty'] += pii.quantity
             product_data[pid]['selling_amount_inr'] += item_inr
+            product_data[pid]['selling_amount_original'] += pii.amount
+            product_data[pid]['selling_currency'] = pii.proforma_invoice.currency
+            product_data[pid]['selling_conversion_rate'] = float(rate)
 
         items_result = []
         for pid, data in product_data.items():
@@ -743,10 +822,16 @@ class ProfitLossItemReportView(APIView):
                 'unit': data['unit'],
                 'purchase_qty': float(data['purchase_qty']),
                 'purchase_amount_inr': float(data['purchase_amount_inr']),
+                'purchase_amount_original': float(data['purchase_amount_original']),
+                'purchase_currency': data['purchase_currency'],
+                'purchase_conversion_rate': data['purchase_conversion_rate'],
                 'allocated_transport_inr': float(allocated_transport),
                 'total_cost_inr': float(total_cost),
                 'selling_qty': float(data['selling_qty']),
                 'selling_amount_inr': float(data['selling_amount_inr']),
+                'selling_amount_original': float(data['selling_amount_original']),
+                'selling_currency': data['selling_currency'],
+                'selling_conversion_rate': data['selling_conversion_rate'],
                 'profit_loss_inr': float(profit_loss),
                 'margin_percentage': round(float(margin), 2),
                 'alert': alert,
@@ -1051,14 +1136,14 @@ class DueDateTrackingView(APIView):
             'client_payments': {
                 'upcoming': [{
                     'pi_number': pi.pi_number,
-                    'requisition_number': pi.requisition.requisition_number,
+                    'requisition_number': pi.requisition.requisition_number if pi.requisition else 'STOCK SALE',
                     'balance': float(max(pi.grand_total - pi.amount_received, Decimal('0'))),
                     'due_date': pi.payment_due_date.isoformat(),
                     'days_until_due': (pi.payment_due_date - today).days,
                 } for pi in upcoming_client],
                 'overdue': [{
                     'pi_number': pi.pi_number,
-                    'requisition_number': pi.requisition.requisition_number,
+                    'requisition_number': pi.requisition.requisition_number if pi.requisition else 'STOCK SALE',
                     'balance': float(max(pi.grand_total - pi.amount_received, Decimal('0'))),
                     'due_date': pi.payment_due_date.isoformat(),
                     'days_overdue': (today - pi.payment_due_date).days,

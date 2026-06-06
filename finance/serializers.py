@@ -134,7 +134,7 @@ class PIPaymentSerializer(serializers.ModelSerializer):
 
 
 class PIFinanceSummarySerializer(serializers.ModelSerializer):
-    requisition_number = serializers.CharField(source='requisition.requisition_number', read_only=True)
+    requisition_number = serializers.SerializerMethodField()
     created_by_name    = serializers.CharField(source='created_by.get_full_name', read_only=True)
     payment_count      = serializers.SerializerMethodField()
     balance            = serializers.SerializerMethodField()
@@ -152,6 +152,11 @@ class PIFinanceSummarySerializer(serializers.ModelSerializer):
             'created_at', 'updated_at',
         ]
         read_only_fields = fields
+
+    def get_requisition_number(self, obj):
+        if obj.requisition:
+            return obj.requisition.requisition_number
+        return None
 
     def get_balance(self, obj):
         return float(max(obj.grand_total - obj.amount_received, Decimal('0')))

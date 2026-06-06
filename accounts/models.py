@@ -16,6 +16,7 @@ MODULE_CHOICES = [
     ('SALES', 'Sales'),
     ('FINANCE', 'Finance'),
     ('TRANSPORT', 'Transport'),
+    ('RETURNS', 'Returns'),
 ]
 
 

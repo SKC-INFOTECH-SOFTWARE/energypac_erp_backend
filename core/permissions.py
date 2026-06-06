@@ -58,6 +58,11 @@ class TransportModulePermission(ModulePermission):
     message = "You don't have access to the Transport module."
 
 
+class ReturnsModulePermission(ModulePermission):
+    module = 'RETURNS'
+    message = "You don't have access to the Returns module."
+
+
 class CurrencyMasterPermission(BasePermission):
     message = "You don't have access to currency master."
 

@@ -89,13 +89,23 @@ class RequisitionViewSet(viewsets.ModelViewSet):
     def comparison(self, request, pk=None):
         """
         Compare vendor quotations for this requisition.
-        All vendors shown together — currency displayed per vendor.
+        Each item includes has_po flag showing if a PO already exists for it.
         """
+        from purchase_orders.models import PurchaseOrderItem
+
         requisition = self.get_object()
         assignments = VendorRequisitionAssignment.objects.filter(
             requisition=requisition
         ).select_related('vendor').prefetch_related(
             'quotations__items__product'
+        )
+
+        existing_po_item_ids = set(
+            PurchaseOrderItem.objects.filter(
+                po__requisition=requisition
+            ).exclude(
+                po__status='CANCELLED'
+            ).values_list('quotation_item_id', flat=True)
         )
 
         vendors = []
@@ -120,7 +130,8 @@ class RequisitionViewSet(viewsets.ModelViewSet):
                         'quantity': item.quantity,
                         'unit': item.product.unit,
                         'quoted_rate': item.quoted_rate,
-                        'amount': item.amount
+                        'amount': item.amount,
+                        'has_po': item.id in existing_po_item_ids,
                     })
                 vendors.append(vendor_info)
 

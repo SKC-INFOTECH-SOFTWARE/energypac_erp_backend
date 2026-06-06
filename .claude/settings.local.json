@@ -48,7 +48,13 @@
       "PowerShell(D:\\\\energypac\\\\venv\\\\Scripts\\\\python.exe D:\\\\energypac\\\\manage.py makemigrations inventory 2>&1)",
       "PowerShell(try { $r = Invoke-WebRequest -Uri \"http://localhost:8000/api/auth/login\" -Method POST -ContentType \"application/json\" -Body '{\"employee_code\":\"test\",\"password\":\"test\"}' -ErrorAction Stop; $r.StatusCode } catch { $_.Exception.Response.StatusCode.value__ })",
       "PowerShell(Set-Content *)",
-      "PowerShell(if \\(-not \\(Test-Path \"D:\\\\energypac\\\\client\"\\)\\) { New-Item -ItemType Directory -Path \"D:\\\\energypac\\\\client\" -Force })"
+      "PowerShell(if \\(-not \\(Test-Path \"D:\\\\energypac\\\\client\"\\)\\) { New-Item -ItemType Directory -Path \"D:\\\\energypac\\\\client\" -Force })",
+      "PowerShell(& D:\\\\energypac\\\\venv\\\\Scripts\\\\activate.ps1; python D:\\\\energypac\\\\manage.py makemigrations sales --name=\"make_requisition_nullable_on_pi\")",
+      "PowerShell(& D:\\\\energypac\\\\venv\\\\Scripts\\\\activate.ps1; python -c \"import django; import os; os.environ['DJANGO_SETTINGS_MODULE']='core.settings'; django.setup\\(\\); from sales.serializers import ProformaInvoiceCreateSerializer, ProformaInvoiceSerializer; print\\('Serializers OK'\\); from sales.views import ProformaInvoiceViewSet; print\\('Views OK'\\); from finance.views import ProfitLossReportView; print\\('Finance OK'\\)\")",
+      "PowerShell(& D:\\\\energypac\\\\venv\\\\Scripts\\\\activate.ps1; python -c \"import django; import os; os.environ['DJANGO_SETTINGS_MODULE']='erp_energypac.settings'; django.setup\\(\\); from sales.serializers import ProformaInvoiceCreateSerializer, ProformaInvoiceSerializer; print\\('Serializers OK'\\); from sales.views import ProformaInvoiceViewSet; print\\('Views OK'\\); from finance.views import ProfitLossReportView; print\\('Finance OK'\\); from inventory.views import ProductViewSet; print\\('Inventory OK'\\)\")",
+      "PowerShell(& D:\\\\energypac\\\\venv\\\\Scripts\\\\activate.ps1; python D:\\\\energypac\\\\manage.py check --deploy 2>&1 | Select-Object -First 30)",
+      "Bash(npm run *)",
+      "PowerShell(New-Item *)"
     ]
   }
 }

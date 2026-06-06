@@ -54,6 +54,9 @@ class TransportEntryViewSet(viewsets.ModelViewSet):
 
     def perform_update(self, serializer):
         entry = self.get_object()
+        if entry.status == 'DELIVERED':
+            from rest_framework.exceptions import ValidationError
+            raise ValidationError("Cannot edit a delivered transport entry.")
         old_values = {
             'transporter': entry.transporter_name,
             'status': entry.status,

@@ -69,3 +69,78 @@ class ProductViewSet(PasswordConfirmDestroyMixin, viewsets.ModelViewSet):
         products = self.queryset.filter(requisition_number=req_number)
         serializer = self.get_serializer(products, many=True)
         return Response(serializer.data)
+
+    @action(detail=True, methods=['get'])
+    def tracking(self, request, pk=None):
+        """Full lifecycle: all requisitions, POs, PIs for this product"""
+        from purchase_orders.models import PurchaseOrderItem
+        from sales.models import ProformaInvoiceItem
+
+        product = self.get_object()
+
+        purchases = PurchaseOrderItem.objects.filter(
+            product=product, is_received=True
+        ).exclude(po__status='CANCELLED').select_related(
+            'po__requisition', 'po__vendor'
+        ).order_by('-po__po_date')
+
+        purchase_history = []
+        for poi in purchases:
+            conv = float(poi.po.conversion_rate or 1)
+            if poi.po.currency == 'INR':
+                conv = 1
+            purchase_history.append({
+                'requisition_number': poi.po.requisition.requisition_number,
+                'requisition_id': str(poi.po.requisition.id),
+                'po_number': poi.po.po_number,
+                'po_id': str(poi.po.id),
+                'vendor_name': poi.po.vendor.vendor_name,
+                'po_date': poi.po.po_date,
+                'quantity': float(poi.quantity),
+                'rate': float(poi.rate),
+                'amount': float(poi.amount),
+                'currency': poi.po.currency,
+                'conversion_rate': conv,
+                'amount_inr': round(float(poi.amount) * conv, 2),
+            })
+
+        sales = ProformaInvoiceItem.objects.filter(
+            product=product
+        ).exclude(proforma_invoice__status='CANCELLED').select_related(
+            'proforma_invoice__requisition'
+        ).order_by('-proforma_invoice__pi_date')
+
+        sale_history = []
+        for pii in sales:
+            pi = pii.proforma_invoice
+            conv = float(pi.conversion_rate or 1)
+            if pi.currency == 'INR':
+                conv = 1
+            sale_history.append({
+                'pi_number': pi.pi_number,
+                'pi_id': str(pi.id),
+                'requisition_number': pi.requisition.requisition_number if pi.requisition else None,
+                'is_stock_sale': pi.requisition is None,
+                'pi_date': pi.pi_date,
+                'status': pi.status,
+                'quantity': float(pii.quantity),
+                'unit_price': float(pii.unit_price),
+                'amount': float(pii.amount),
+                'currency': pi.currency,
+                'conversion_rate': conv,
+                'amount_inr': round(float(pii.amount) * conv, 2),
+            })
+
+        return Response({
+            'product': {
+                'id': str(product.id),
+                'item_code': product.item_code,
+                'item_name': product.item_name,
+                'unit': product.unit,
+                'current_stock': float(product.current_stock),
+            },
+            'total_purchases': len(purchase_history),
+            'total_sales': len(sale_history),
+            'purchases': purchase_history,
+            'sales': sale_history,
+        })

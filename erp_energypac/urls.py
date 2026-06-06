@@ -97,6 +97,9 @@ from transport.views import (
     TransportDashboardView,
 )
 
+# Returns
+from returns.views import SalesReturnViewSet, PurchaseReturnViewSet
+
 
 
 # Create router
@@ -114,6 +117,8 @@ router.register(r'pi-bills', PIBillViewSet, basename='pi-bill')
 router.register(r'transport', TransportEntryViewSet, basename='transport')
 router.register(r'currencies', CurrencyViewSet, basename='currency')
 router.register(r'proforma-invoices', ProformaInvoiceViewSet, basename='proforma-invoice')
+router.register(r'sales-returns', SalesReturnViewSet, basename='sales-return')
+router.register(r'purchase-returns', PurchaseReturnViewSet, basename='purchase-return')
 
 # Admin router
 admin_router = DefaultRouter(trailing_slash=False)

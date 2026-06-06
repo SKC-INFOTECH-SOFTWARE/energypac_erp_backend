@@ -42,6 +42,7 @@ INSTALLED_APPS = [
     'finance',
     'audit_logs',
     'transport',
+    'returns',
 ]
 
 MIDDLEWARE = [

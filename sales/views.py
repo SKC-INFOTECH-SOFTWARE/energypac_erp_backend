@@ -442,7 +442,7 @@ class ProformaInvoiceViewSet(viewsets.ModelViewSet):
         pi = serializer.save(created_by=self.request.user)
         AuditLog.log(self.request.user, 'CREATE', pi, {
             'pi_number': pi.pi_number,
-            'requisition': pi.requisition.requisition_number,
+            'requisition': pi.requisition.requisition_number if pi.requisition else 'STOCK SALE',
             'currency': pi.currency,
             'grand_total': str(pi.grand_total),
         })
@@ -559,16 +559,98 @@ class ProformaInvoiceViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['post'])
     def accept(self, request, pk=None):
+        from datetime import date
+        from django.db import transaction as db_transaction
+        from inventory.models import Product
+
         pi = self.get_object()
-        return self._change_status(request, pi, 'ACCEPTED')
+        allowed = self.ALLOWED_TRANSITIONS.get(pi.status, [])
+        if 'ACCEPTED' not in allowed:
+            return Response(
+                {'error': f'Cannot move from {pi.status} to ACCEPTED', 'current_status': pi.status, 'allowed_transitions': allowed},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        with db_transaction.atomic():
+            product_ids = list(pi.items.values_list('product_id', flat=True))
+            locked_products = {
+                p.id: p for p in Product.objects.select_for_update().filter(id__in=product_ids)
+            }
+
+            insufficient = []
+            for item in pi.items.select_related('product').all():
+                product = locked_products[item.product_id]
+                if product.current_stock < item.quantity:
+                    insufficient.append({
+                        'product': product.item_name,
+                        'product_code': product.item_code,
+                        'available': float(product.current_stock),
+                        'required': float(item.quantity),
+                    })
+            if insufficient:
+                return Response(
+                    {'error': 'Insufficient stock to accept PI', 'insufficient_items': insufficient},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            old_status = pi.status
+            pi.status = 'ACCEPTED'
+            pi.save()
+
+            for item in pi.items.all():
+                product = locked_products[item.product_id]
+                product.current_stock -= item.quantity
+                product.sale_count += 1
+                product.total_sold_qty += item.quantity
+                product.last_sale_date = date.today()
+                product.save()
+
+        AuditLog.log(request.user, 'STATUS_CHANGE', pi, {
+            'pi_number': pi.pi_number, 'old_status': old_status, 'new_status': 'ACCEPTED',
+        })
+        return Response({'message': 'PI accepted — stock updated', 'pi': ProformaInvoiceSerializer(pi).data})
 
     @action(detail=True, methods=['post'])
     def cancel(self, request, pk=None):
+        from django.db import transaction as db_transaction
+
         password_error = check_password_confirmation(request)
         if password_error:
             return password_error
+
         pi = self.get_object()
-        return self._change_status(request, pi, 'CANCELLED')
+        allowed = self.ALLOWED_TRANSITIONS.get(pi.status, [])
+        if 'CANCELLED' not in allowed:
+            return Response(
+                {'error': f'Cannot move from {pi.status} to CANCELLED', 'current_status': pi.status, 'allowed_transitions': allowed},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        was_accepted = pi.status == 'ACCEPTED'
+
+        with db_transaction.atomic():
+            old_status = pi.status
+            pi.status = 'CANCELLED'
+            pi.save()
+
+            if was_accepted:
+                from inventory.models import Product
+                product_ids = list(pi.items.values_list('product_id', flat=True))
+                locked_products = {
+                    p.id: p for p in Product.objects.select_for_update().filter(id__in=product_ids)
+                }
+                for item in pi.items.all():
+                    product = locked_products[item.product_id]
+                    product.current_stock += item.quantity
+                    product.sale_count = max(product.sale_count - 1, 0)
+                    product.total_sold_qty = max(product.total_sold_qty - item.quantity, 0)
+                    product.save()
+
+        AuditLog.log(request.user, 'STATUS_CHANGE', pi, {
+            'pi_number': pi.pi_number, 'old_status': old_status, 'new_status': 'CANCELLED',
+            'stock_reversed': was_accepted,
+        })
+        return Response({'message': f'PI cancelled{" — stock reversed" if was_accepted else ""}', 'pi': ProformaInvoiceSerializer(pi).data})
 
     # ── Requisition items with purchase status ───────────────────────────
 
@@ -577,9 +659,13 @@ class ProformaInvoiceViewSet(viewsets.ModelViewSet):
         """
         GET /api/proforma-invoices/requisition_items?requisition=uuid
         Returns requisition items with their purchase status.
+        Items not yet purchased (is_received=False) are flagged so frontend can disable them.
+        Also shows how much quantity is already allocated to other active PIs.
         """
+        from django.db.models import Sum
         from purchase_orders.models import PurchaseOrderItem
         from requisitions.models import RequisitionItem
+        from .models import ProformaInvoiceItem
 
         req_id = request.query_params.get('requisition')
         if not req_id:
@@ -593,14 +679,38 @@ class ProformaInvoiceViewSet(viewsets.ModelViewSet):
         for ri in req_items:
             po_item = PurchaseOrderItem.objects.filter(
                 po__requisition_id=req_id, product=ri.product,
-            ).first()
+            ).exclude(po__status='CANCELLED').first()
 
             if not po_item:
                 purchase_status = 'PENDING'
+                can_add_to_pi = False
             elif po_item.is_received:
                 purchase_status = 'COMPLETED'
+                can_add_to_pi = True
             else:
                 purchase_status = 'PO_CREATED'
+                can_add_to_pi = False
+
+            already_in_pi = ProformaInvoiceItem.objects.filter(
+                proforma_invoice__requisition_id=req_id,
+                product=ri.product,
+            ).exclude(
+                proforma_invoice__status='CANCELLED'
+            ).aggregate(total=Sum('quantity'))['total'] or 0
+
+            purchased_qty = PurchaseOrderItem.objects.filter(
+                po__requisition_id=req_id,
+                product=ri.product,
+                is_received=True,
+            ).exclude(po__status='CANCELLED').aggregate(
+                total=Sum('quantity')
+            )['total'] or 0
+
+            remaining_qty = max(float(purchased_qty) - float(already_in_pi), 0)
+
+            if can_add_to_pi and remaining_qty <= 0:
+                can_add_to_pi = False
+                purchase_status = 'FULLY_ALLOCATED'
 
             result.append({
                 'requisition_item_id': str(ri.id),
@@ -610,7 +720,58 @@ class ProformaInvoiceViewSet(viewsets.ModelViewSet):
                 'hsn_code': ri.product.hsn_code,
                 'unit': ri.product.unit,
                 'quantity': float(ri.quantity),
+                'already_in_pi': float(already_in_pi),
+                'remaining_qty': remaining_qty,
+                'current_stock': float(ri.product.current_stock),
                 'purchase_status': purchase_status,
+                'can_add_to_pi': can_add_to_pi,
+            })
+
+        return Response({'items': result})
+
+    @action(detail=False, methods=['get'])
+    def stock_items(self, request):
+        """
+        GET /api/proforma-invoices/stock_items
+        Returns products with stock > 0 for direct/stock sale PI (no requisition).
+        Includes purchase history — which requisitions the product was bought under.
+        """
+        from inventory.models import Product
+        from purchase_orders.models import PurchaseOrderItem
+
+        products = Product.objects.filter(
+            is_active=True, current_stock__gt=0
+        ).order_by('item_name')
+
+        result = []
+        for p in products:
+            po_items = PurchaseOrderItem.objects.filter(
+                product=p, is_received=True,
+            ).exclude(po__status='CANCELLED').select_related(
+                'po__requisition'
+            ).order_by('-po__po_date')
+
+            purchase_history = []
+            seen_reqs = set()
+            for poi in po_items:
+                req = poi.po.requisition
+                if req and req.id not in seen_reqs:
+                    seen_reqs.add(req.id)
+                    purchase_history.append({
+                        'requisition_number': req.requisition_number,
+                        'po_number': poi.po.po_number,
+                        'qty': float(poi.quantity),
+                        'rate': float(poi.rate),
+                    })
+
+            result.append({
+                'product_id': str(p.id),
+                'product_code': p.item_code,
+                'product_name': p.item_name,
+                'unit': p.unit,
+                'current_stock': float(p.current_stock),
+                'rate': float(p.rate),
+                'purchase_history': purchase_history,
             })
 
         return Response({'items': result})
