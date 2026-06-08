@@ -211,6 +211,8 @@ class PurchaseOrderFinanceViewSet(viewsets.ReadOnlyModelViewSet):
             'po_number': po.po_number,
             'vendor_name': po.vendor.vendor_name,
             'po_date': po.po_date.isoformat(),
+            'currency': po.currency or 'INR',
+            'conversion_rate': float(po.conversion_rate) if po.conversion_rate else None,
             'total_amount': float(po.total_amount),
             'total_paid': float(po.amount_paid),
             'balance': float(computed_balance),

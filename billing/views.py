@@ -171,6 +171,8 @@ class PIBillViewSet(viewsets.ModelViewSet):
         payments = bill.payments.all().order_by('payment_number')
         return Response({
             'bill_number': bill.bill_number,
+            'currency': bill.currency,
+            'conversion_rate': float(bill.conversion_rate) if bill.conversion_rate else None,
             'net_payable': float(bill.net_payable),
             'total_paid': float(bill.amount_paid),
             'balance': float(bill.balance),

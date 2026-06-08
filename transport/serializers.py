@@ -90,6 +90,27 @@ class TransportEntryCreateSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError(
                 "Either purchase_order or proforma_invoice is required"
             )
+
+        if data.get('purchase_order'):
+            existing = TransportEntry.objects.filter(
+                purchase_order=data['purchase_order']
+            ).exclude(status='CANCELLED').first()
+            if existing:
+                raise serializers.ValidationError(
+                    f"A transport entry ({existing.transport_number}) already exists for this Purchase Order. "
+                    f"Duplicate transport entries are not allowed."
+                )
+
+        if data.get('proforma_invoice'):
+            existing = TransportEntry.objects.filter(
+                proforma_invoice=data['proforma_invoice']
+            ).exclude(status='CANCELLED').first()
+            if existing:
+                raise serializers.ValidationError(
+                    f"A transport entry ({existing.transport_number}) already exists for this Proforma Invoice. "
+                    f"Duplicate transport entries are not allowed."
+                )
+
         return data
 
     def validate_cost_items(self, value):

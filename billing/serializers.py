@@ -1,6 +1,7 @@
 from rest_framework import serializers
 from django.db import transaction
 from .models import PIBill, PIBillItem, PIBillPayment
+from django.db.models import Q
 from sales.models import ProformaInvoice, ProformaInvoiceItem
 from inventory.models import Product
 
@@ -114,6 +115,14 @@ class PIBillCreateSerializer(serializers.Serializer):
             raise serializers.ValidationError("Proforma Invoice not found")
         if pi.status == 'CANCELLED':
             raise serializers.ValidationError("Cannot generate bill for cancelled PI")
+        existing_bill = PIBill.objects.filter(
+            proforma_invoice=pi
+        ).exclude(status='CANCELLED').first()
+        if existing_bill:
+            raise serializers.ValidationError(
+                f"A bill ({existing_bill.bill_number}) has already been generated for this PI. "
+                f"Duplicate bills are not allowed."
+            )
         return value
 
     def validate_items(self, value):
