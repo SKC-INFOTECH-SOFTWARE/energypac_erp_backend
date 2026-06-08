@@ -14,11 +14,12 @@ class PurchasePaymentSerializer(serializers.ModelSerializer):
     payment_mode_display = serializers.CharField(source='get_payment_mode_display', read_only=True)
     po_number            = serializers.CharField(source='purchase_order.po_number', read_only=True)
     vendor_name          = serializers.CharField(source='purchase_order.vendor.vendor_name', read_only=True)
+    currency             = serializers.CharField(source='purchase_order.currency', read_only=True)
 
     class Meta:
         model  = PurchasePayment
         fields = [
-            'id', 'purchase_order', 'po_number', 'vendor_name',
+            'id', 'purchase_order', 'po_number', 'vendor_name', 'currency',
             'payment_number', 'amount', 'payment_date',
             'payment_mode', 'payment_mode_display', 'reference_number',
             'remarks', 'payment_status',
@@ -119,11 +120,13 @@ class PIPaymentSerializer(serializers.ModelSerializer):
     recorded_by_name     = serializers.CharField(source='recorded_by.get_full_name', read_only=True)
     payment_mode_display = serializers.CharField(source='get_payment_mode_display', read_only=True)
     pi_number            = serializers.CharField(source='proforma_invoice.pi_number', read_only=True)
+    currency             = serializers.CharField(source='proforma_invoice.currency', read_only=True)
+    client_name          = serializers.CharField(source='proforma_invoice.applicant_importer', read_only=True)
 
     class Meta:
         model  = PIPayment
         fields = [
-            'id', 'proforma_invoice', 'pi_number',
+            'id', 'proforma_invoice', 'pi_number', 'client_name', 'currency',
             'payment_number', 'amount', 'payment_date',
             'payment_mode', 'payment_mode_display', 'reference_number',
             'remarks', 'payment_status',

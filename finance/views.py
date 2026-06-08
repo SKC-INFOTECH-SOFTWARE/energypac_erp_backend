@@ -552,8 +552,8 @@ class AdvancePaymentViewSet(viewsets.ModelViewSet):
 def _to_inr(amount, currency, conversion_rate):
     """Convert amount to INR using stored rate."""
     if currency == 'INR' or not conversion_rate:
-        return amount
-    return amount * conversion_rate
+        return float(amount or 0)
+    return float((amount or 0) * conversion_rate)
 
 
 class ProfitLossReportView(APIView):
@@ -1318,18 +1318,26 @@ class FinanceDashboardView(APIView):
     def get(self, request):
         today = date_type.today()
 
-        # ── Outgoing (PO → Vendor) ──────────────────────────────────────────
+        # ── Outgoing (PO → Vendor) — all in INR ────────────────────────────
         pos = PurchaseOrder.objects.exclude(status='CANCELLED')
-        total_po_value = pos.aggregate(total=Sum('total_amount'))['total'] or Decimal('0')
-        total_paid_to_vendors = pos.aggregate(total=Sum('amount_paid'))['total'] or Decimal('0')
-        outstanding_to_vendors = max(total_po_value - total_paid_to_vendors, Decimal('0'))
+        total_po_value = sum(
+            _to_inr(po.total_amount, po.currency, po.conversion_rate) for po in pos
+        )
+        total_paid_to_vendors = sum(
+            _to_inr(po.amount_paid, po.currency, po.conversion_rate) for po in pos
+        )
+        outstanding_to_vendors = max(total_po_value - total_paid_to_vendors, 0)
         pending_po_count = pos.filter(total_amount__gt=F('amount_paid')).count()
 
-        # ── Incoming (PI → Client) ──────────────────────────────────────────
+        # ── Incoming (PI → Client) — all in INR ────────────────────────────
         pis = ProformaInvoice.objects.exclude(status='CANCELLED')
-        total_pi_value = pis.aggregate(total=Sum('grand_total'))['total'] or Decimal('0')
-        total_received_from_clients = pis.aggregate(total=Sum('amount_received'))['total'] or Decimal('0')
-        outstanding_from_clients = max(total_pi_value - total_received_from_clients, Decimal('0'))
+        total_pi_value = sum(
+            _to_inr(pi.grand_total, pi.currency, pi.conversion_rate) for pi in pis
+        )
+        total_received_from_clients = sum(
+            _to_inr(pi.amount_received, pi.currency, pi.conversion_rate) for pi in pis
+        )
+        outstanding_from_clients = max(total_pi_value - total_received_from_clients, 0)
         pending_pi_count = pis.filter(grand_total__gt=F('amount_received')).count()
 
         # ── Transport costs ──────────────────────────────────────────────────
@@ -1338,19 +1346,13 @@ class FinanceDashboardView(APIView):
         ).aggregate(total=Sum('total_cost'))['total'] or Decimal('0')
 
         # ── P&L Summary ──────────────────────────────────────────────────────
-        total_revenue_inr = sum(
-            _to_inr(pi.grand_total, pi.currency, pi.conversion_rate)
-            for pi in pis
-        )
-        total_cost_inr = sum(
-            _to_inr(po.total_amount, po.currency, po.conversion_rate)
-            for po in pos
-        ) + total_transport
+        total_revenue_inr = total_pi_value
+        total_cost_inr = total_po_value + float(total_transport)
         total_profit = total_revenue_inr - total_cost_inr
 
-        # ── Cash flow ────────────────────────────────────────────────────────
+        # ── Cash flow (all INR) ──────────────────────────────────────────────
         total_inflow = total_received_from_clients
-        total_outflow = total_paid_to_vendors + total_transport
+        total_outflow = total_paid_to_vendors + float(total_transport)
 
         # ── Due dates ────────────────────────────────────────────────────────
         overdue_vendor_count = pos.filter(
@@ -1362,9 +1364,9 @@ class FinanceDashboardView(APIView):
 
         # ── Advance payments ─────────────────────────────────────────────────
         active_advances = AdvancePayment.objects.filter(status='ACTIVE')
-        total_advance_remaining = active_advances.aggregate(
-            total=Sum('remaining')
-        )['total'] or Decimal('0')
+        total_advance_remaining = sum(
+            _to_inr(adv.remaining, adv.currency, adv.conversion_rate) for adv in active_advances
+        )
 
         # ── Recent activity ──────────────────────────────────────────────────
         recent_outgoing = PurchasePayment.objects.select_related(
@@ -1376,9 +1378,14 @@ class FinanceDashboardView(APIView):
 
         # ── Purchase items ───────────────────────────────────────────────────
         total_po_items = PurchaseOrderItem.objects.exclude(po__status='CANCELLED').count()
-        purchased_items = PurchaseOrderItem.objects.filter(
+        purchased_items_qs = PurchaseOrderItem.objects.filter(
             is_received=True
-        ).exclude(po__status='CANCELLED').count()
+        ).exclude(po__status='CANCELLED').select_related('po')
+        purchased_items = purchased_items_qs.count()
+        purchased_value = sum(
+            _to_inr(item.amount, item.po.currency, item.po.conversion_rate)
+            for item in purchased_items_qs
+        )
 
         return Response({
             'outgoing': {
@@ -1422,6 +1429,7 @@ class FinanceDashboardView(APIView):
                 'total_items': total_po_items,
                 'purchased_items': purchased_items,
                 'pending_items': total_po_items - purchased_items,
+                'purchased_value': float(purchased_value),
             },
             'recent_outgoing': PurchasePaymentSerializer(recent_outgoing, many=True).data,
             'recent_incoming': PIPaymentSerializer(recent_incoming, many=True).data,
