@@ -593,17 +593,17 @@ class ProfitLossReportView(APIView):
                 for po in pos
             )
 
-            transport_po = TransportEntry.objects.filter(
+            transport_po = float(TransportEntry.objects.filter(
                 purchase_order__requisition=req
             ).exclude(status='CANCELLED').aggregate(
                 total=Sum('total_cost')
-            )['total'] or Decimal('0')
+            )['total'] or 0)
 
-            transport_pi = TransportEntry.objects.filter(
+            transport_pi = float(TransportEntry.objects.filter(
                 proforma_invoice__requisition=req
             ).exclude(status='CANCELLED').aggregate(
                 total=Sum('total_cost')
-            )['total'] or Decimal('0')
+            )['total'] or 0)
 
             transport_total = transport_po + transport_pi
             total_cost = po_total_inr + transport_total
@@ -618,7 +618,7 @@ class ProfitLossReportView(APIView):
             )
 
             profit_loss = pi_total_inr - total_cost
-            margin = (profit_loss / pi_total_inr * 100) if pi_total_inr > 0 else Decimal('0')
+            margin = (profit_loss / pi_total_inr * 100) if pi_total_inr > 0 else 0
 
             alert = None
             if profit_loss < 0:
@@ -655,8 +655,8 @@ class ProfitLossReportView(APIView):
                 pass
 
         if stock_sale_pis.exists():
-            stock_revenue_inr = Decimal('0')
-            stock_cost_inr = Decimal('0')
+            stock_revenue_inr = 0.0
+            stock_cost_inr = 0.0
             for pi in stock_sale_pis:
                 pi_rev = _to_inr(pi.grand_total, pi.currency, pi.conversion_rate)
                 stock_revenue_inr += pi_rev
@@ -668,10 +668,10 @@ class ProfitLossReportView(APIView):
                         rate = last_purchase.po.conversion_rate or Decimal('1')
                         if last_purchase.po.currency == 'INR':
                             rate = Decimal('1')
-                        stock_cost_inr += last_purchase.rate * pii.quantity * rate
+                        stock_cost_inr += float(last_purchase.rate * pii.quantity * rate)
 
             stock_pl = stock_revenue_inr - stock_cost_inr
-            stock_margin = (stock_pl / stock_revenue_inr * 100) if stock_revenue_inr > 0 else Decimal('0')
+            stock_margin = (stock_pl / stock_revenue_inr * 100) if stock_revenue_inr > 0 else 0
             results.append({
                 'requisition_id': None,
                 'requisition_number': 'STOCK SALES',
@@ -881,13 +881,13 @@ class ProfitPreviewView(APIView):
             _to_inr(po.total_amount, po.currency, po.conversion_rate) for po in pos
         )
 
-        transport_cost = TransportEntry.objects.filter(
+        transport_cost = float(TransportEntry.objects.filter(
             Q(purchase_order__requisition=req) | Q(proforma_invoice__requisition=req)
-        ).exclude(status='CANCELLED').aggregate(total=Sum('total_cost'))['total'] or Decimal('0')
+        ).exclude(status='CANCELLED').aggregate(total=Sum('total_cost'))['total'] or 0)
 
         total_cost = purchase_cost_inr + transport_cost
-        expected_profit = selling_inr - total_cost
-        margin = (expected_profit / selling_inr * 100) if selling_inr > 0 else Decimal('0')
+        expected_profit = float(selling_inr) - total_cost
+        margin = (expected_profit / float(selling_inr) * 100) if selling_inr > 0 else 0
 
         alert = None
         if expected_profit < 0:
