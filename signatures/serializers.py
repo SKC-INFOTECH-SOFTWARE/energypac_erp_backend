@@ -56,10 +56,20 @@ class SignatureDetailSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'user', 'created_at']
 
     def get_signature_url(self, obj):
-        """Return signature file URL"""
+        """
+        Return the signature as a base64 data-URI.
+
+        We store the image bytes in `signature_base64`, so serving them inline
+        means the <img> works in production without depending on /media/ being
+        routed through the reverse proxy (which it usually isn't). Falls back to
+        the file URL if base64 is somehow missing.
+        """
+        if obj.signature_base64:
+            return f'data:image/png;base64,{obj.signature_base64}'
         if obj.signature_file:
             request = self.context.get('request')
-            return request.build_absolute_uri(obj.signature_file.url)
+            url = obj.signature_file.url
+            return request.build_absolute_uri(url) if request else url
         return None
 
 
