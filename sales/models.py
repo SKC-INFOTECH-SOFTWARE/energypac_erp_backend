@@ -20,9 +20,28 @@ class ProformaInvoice(models.Model):
         ('CANCELLED', 'Cancelled'),
     ]
 
+    SOURCE_CHOICES = [
+        ('REQUISITION', 'From Requisition'),  # generated against a requisition (full procurement flow)
+        ('STOCK_SALE',  'Stock Sale'),        # selling leftover inventory (stock > 0), no requisition
+        ('DIRECT',      'Direct PI'),          # phone-rate / ad-hoc sale, no requisition, no stock check
+    ]
+
+    TRADE_TYPE_CHOICES = [
+        ('DOMESTIC',      'Domestic'),        # within India -> PI Bill + GST flow
+        ('INTERNATIONAL', 'International'),    # export -> Commercial Invoice + Packing List, NO GST
+    ]
+
     id         = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     pi_number  = models.CharField(max_length=50, unique=True, editable=False)
     requisition = models.ForeignKey(Requisition, on_delete=models.PROTECT, related_name='proforma_invoices', null=True, blank=True)
+    source     = models.CharField(
+        max_length=20, choices=SOURCE_CHOICES, default='REQUISITION',
+        help_text="How this PI was created — requisition flow, stock sale, or direct"
+    )
+    trade_type = models.CharField(
+        max_length=15, choices=TRADE_TYPE_CHOICES, default='DOMESTIC',
+        help_text="Domestic (PI Bill + GST) or International (Commercial Invoice, no GST)"
+    )
     pi_date    = models.DateField()
     currency   = models.CharField(max_length=10, default='INR')
 

@@ -120,6 +120,25 @@ class ProfileView(generics.RetrieveAPIView):
         return self.request.user
 
 
+class UsersListForVerificationView(generics.ListAPIView):
+    """
+    List all active users for verification/signature selection.
+    Any authenticated user can access this (not restricted to admin).
+    """
+    serializer_class = UserSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    filter_backends = [filters.SearchFilter, filters.OrderingFilter]
+    search_fields = ['employee_code', 'first_name', 'last_name', 'email', 'department']
+    ordering_fields = ['first_name', 'last_name', 'department']
+    ordering = ['first_name', 'last_name']
+
+    def get_queryset(self):
+        # Return all active users INCLUDING the current user, so a user can
+        # assign themselves to a verification role (Checked By / Authorized
+        # Signatory) and have their part auto-signed.
+        return User.objects.filter(is_active=True)
+
+
 class AdminUserViewSet(viewsets.ModelViewSet):
     """
     Admin-only CRUD for managing users and their module permissions.

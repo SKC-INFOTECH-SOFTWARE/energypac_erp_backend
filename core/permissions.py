@@ -63,6 +63,33 @@ class ReturnsModulePermission(ModulePermission):
     message = "You don't have access to the Returns module."
 
 
+class TransportOrFinancePermission(BasePermission):
+    """Grants access if the user can use EITHER the Transport OR the Finance module.
+    Used for transporter-payment endpoints that live in both the Transport and
+    Finance areas."""
+    message = "You need Transport or Finance module access."
+
+    def has_permission(self, request, view):
+        user = request.user
+        if not user or not user.is_authenticated:
+            return False
+        if user.role == 'ADMIN':
+            return True
+
+        write = request.method not in SAFE_METHODS
+        for module in ('TRANSPORT', 'FINANCE'):
+            try:
+                perm = user.module_permissions.get(module=module)
+            except user.module_permissions.model.DoesNotExist:
+                continue
+            if write:
+                if perm.can_write:
+                    return True
+            elif perm.can_read or perm.can_write:
+                return True
+        return False
+
+
 class CurrencyMasterPermission(BasePermission):
     message = "You don't have access to currency master."
 

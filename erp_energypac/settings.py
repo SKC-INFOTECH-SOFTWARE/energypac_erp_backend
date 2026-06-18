@@ -43,6 +43,9 @@ INSTALLED_APPS = [
     'audit_logs',
     'transport',
     'returns',
+    'signatures',
+    'commercial',
+    'domestic',
 ]
 
 MIDDLEWARE = [

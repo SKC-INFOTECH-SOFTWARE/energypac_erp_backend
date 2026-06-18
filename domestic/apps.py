@@ -1,0 +1,7 @@
+from django.apps import AppConfig
+
+
+class DomesticConfig(AppConfig):
+    default_auto_field = 'django.db.models.BigAutoField'
+    name = 'domestic'
+    verbose_name = 'Domestic Tax Invoice'

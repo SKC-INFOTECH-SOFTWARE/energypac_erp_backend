@@ -1,5 +1,7 @@
 from django.contrib import admin
-from django.urls import path, include
+from django.urls import path, include, re_path
+from django.conf import settings
+from django.views.static import serve as media_serve
 from rest_framework.routers import DefaultRouter
 from rest_framework_simplejwt.views import TokenRefreshView
 from drf_spectacular.views import (
@@ -11,6 +13,7 @@ from drf_spectacular.views import (
 from accounts.views import (
     LoginView, ProfileView, AdminUserViewSet,
     ForgotPasswordView, VerifyOTPView, ResetPasswordView,
+    UsersListForVerificationView,
 )
 from inventory.views import ProductViewSet
 from vendors.views import VendorViewSet
@@ -65,7 +68,10 @@ from finance.views import (
     AllPurchasePaymentsListView,
     AllPIPaymentsListView,
     FinanceDashboardView,
+    FinanceReceivablesByCategoryView,
     ProfitLossReportView,
+    RevenueAnalyticsView,
+    EnterpriseOverviewView,
     ProfitLossItemReportView,
     ProfitPreviewView,
     ItemAnalyticsView,
@@ -90,15 +96,23 @@ from audit_logs.views import AuditLogListView, AuditLogByObjectView
 # Transport
 from transport.views import (
     TransportEntryViewSet,
+    TransporterViewSet,
     TransportCostByPOReportView,
     TransportCostByVendorReportView,
     TransportCostBreakdownReportView,
     LandedCostReportView,
     TransportDashboardView,
+    TransportPaymentsFinanceView,
 )
 
 # Returns
 from returns.views import SalesReturnViewSet, PurchaseReturnViewSet
+
+# Commercial Invoice & Packing List (export docs)
+from commercial.views import CommercialInvoiceViewSet, PackingListViewSet
+
+# Domestic Tax Invoice
+from domestic.views import TaxInvoiceViewSet
 
 
 
@@ -115,10 +129,14 @@ router.register(r'quotations', SalesQuotationViewSet, basename='sales-quotation'
 router.register(r'quotation-items', SalesQuotationItemViewSet, basename='quotation-item')
 router.register(r'pi-bills', PIBillViewSet, basename='pi-bill')
 router.register(r'transport', TransportEntryViewSet, basename='transport')
+router.register(r'transporters', TransporterViewSet, basename='transporter')
 router.register(r'currencies', CurrencyViewSet, basename='currency')
 router.register(r'proforma-invoices', ProformaInvoiceViewSet, basename='proforma-invoice')
 router.register(r'sales-returns', SalesReturnViewSet, basename='sales-return')
 router.register(r'purchase-returns', PurchaseReturnViewSet, basename='purchase-return')
+router.register(r'commercial-invoices', CommercialInvoiceViewSet, basename='commercial-invoice')
+router.register(r'packing-lists', PackingListViewSet, basename='packing-list')
+router.register(r'tax-invoices', TaxInvoiceViewSet, basename='tax-invoice')
 
 # Admin router
 admin_router = DefaultRouter(trailing_slash=False)
@@ -140,6 +158,7 @@ urlpatterns = [
     path('api/auth/forgot-password', ForgotPasswordView.as_view(), name='forgot-password'),
     path('api/auth/verify-otp', VerifyOTPView.as_view(), name='verify-otp'),
     path('api/auth/reset-password', ResetPasswordView.as_view(), name='reset-password'),
+    path('api/users/for-verification', UsersListForVerificationView.as_view(), name='users-for-verification'),
 
     # Admin endpoints
     path('api/admin/', include(admin_router.urls)),
@@ -148,9 +167,9 @@ urlpatterns = [
     path('api/products/bulk-upload',ProductBulkUploadView.as_view(), name='product-bulk-upload'),
     path('api/products/bulk-upload-template', ProductBulkUploadTemplateView.as_view(), name='product-bulk-upload-template') ,
     # All API endpoints
-    path('api/', include(router.urls)),
+    re_path(r'api/', include(router.urls)),
     path('api/dashboard/stats', DashboardStatsView.as_view(), name='dashboard-stats'),
-    path('api/sales/', include(router.urls)),
+    path('api/', include('signatures.urls')),
 
     # OpenAPI schema
     path('api/schema/', SpectacularAPIView.as_view(), name='schema'),
@@ -265,6 +284,11 @@ urlpatterns = [
         FinanceDashboardView.as_view(),
         name='finance-dashboard'),
 
+    # Client receivables by category (Domestic/International + source)
+    path('api/finance/receivables',
+        FinanceReceivablesByCategoryView.as_view(),
+        name='finance-receivables-by-category'),
+
     # PI payments list
     path('api/finance/all-pi-payments',
         AllPIPaymentsListView.as_view(),
@@ -278,6 +302,14 @@ urlpatterns = [
     path('api/finance/profit-loss/items',
         ProfitLossItemReportView.as_view(),
         name='finance-profit-loss-items'),
+
+    path('api/finance/revenue-analytics',
+        RevenueAnalyticsView.as_view(),
+        name='finance-revenue-analytics'),
+
+    path('api/finance/overview',
+        EnterpriseOverviewView.as_view(),
+        name='finance-enterprise-overview'),
 
     path('api/finance/profit-preview',
         ProfitPreviewView.as_view(),
@@ -329,5 +361,13 @@ urlpatterns = [
     path('api/dashboard/transport',
         TransportDashboardView.as_view(),
         name='dashboard-transport'),
+
+    # Finance-facing transporter payments (both sides)
+    path('api/finance/transport-payments',
+        TransportPaymentsFinanceView.as_view(),
+        name='finance-transport-payments'),
+
+    # Serve uploaded media (signatures, etc.). Works even with DEBUG=False.
+    re_path(r'^media/(?P<path>.*)$', media_serve, {'document_root': settings.MEDIA_ROOT}),
 
 ]

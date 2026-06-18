@@ -187,12 +187,15 @@ class AdvancePaymentSerializer(serializers.ModelSerializer):
     recorded_by_name     = serializers.CharField(source='recorded_by.get_full_name', read_only=True)
     payment_mode_display = serializers.CharField(source='get_payment_mode_display', read_only=True)
     pi_number            = serializers.CharField(source='proforma_invoice.pi_number', read_only=True)
+    pi_source            = serializers.CharField(source='proforma_invoice.source', read_only=True)
+    pi_source_display    = serializers.CharField(source='proforma_invoice.get_source_display', read_only=True)
+    trade_type           = serializers.CharField(source='proforma_invoice.trade_type', read_only=True)
 
     class Meta:
         model  = AdvancePayment
         fields = [
             'id', 'advance_number', 'client_name',
-            'proforma_invoice', 'pi_number',
+            'proforma_invoice', 'pi_number', 'pi_source', 'pi_source_display', 'trade_type',
             'amount', 'currency', 'conversion_rate', 'amount_inr',
             'amount_used', 'remaining',
             'payment_date', 'payment_mode', 'payment_mode_display',

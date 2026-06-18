@@ -29,6 +29,8 @@ class PIBillItemSerializer(serializers.ModelSerializer):
 class PIBillSerializer(serializers.ModelSerializer):
     items           = PIBillItemSerializer(source='pi_bill_items', many=True, read_only=True)
     pi_number       = serializers.CharField(source='proforma_invoice.pi_number', read_only=True)
+    pi_source       = serializers.CharField(source='proforma_invoice.source', read_only=True)
+    pi_source_display = serializers.CharField(source='proforma_invoice.get_source_display', read_only=True)
     created_by_name = serializers.CharField(source='created_by.get_full_name', read_only=True)
     total_gst       = serializers.SerializerMethodField()
 
@@ -36,7 +38,7 @@ class PIBillSerializer(serializers.ModelSerializer):
         model  = PIBill
         fields = [
             'id', 'bill_number', 'bill_type',
-            'proforma_invoice', 'pi_number', 'bill_date',
+            'proforma_invoice', 'pi_number', 'pi_source', 'pi_source_display', 'bill_date',
             'client_name', 'contact_person', 'phone', 'email', 'address',
             'currency', 'conversion_rate',
             'subtotal',

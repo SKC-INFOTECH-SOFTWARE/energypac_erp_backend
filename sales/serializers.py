@@ -496,6 +496,8 @@ class ProformaInvoiceSerializer(serializers.ModelSerializer):
     items              = PIItemSerializer(many=True, read_only=True)
     requisition_number = serializers.SerializerMethodField()
     is_stock_sale      = serializers.SerializerMethodField()
+    source_display     = serializers.CharField(source='get_source_display', read_only=True)
+    trade_type_display = serializers.CharField(source='get_trade_type_display', read_only=True)
     created_by_name    = serializers.CharField(source='created_by.get_full_name', read_only=True)
     locked_by_name     = serializers.SerializerMethodField()
 
@@ -503,7 +505,8 @@ class ProformaInvoiceSerializer(serializers.ModelSerializer):
         model  = ProformaInvoice
         fields = [
             'id', 'pi_number', 'requisition', 'requisition_number',
-            'is_stock_sale',
+            'source', 'source_display', 'is_stock_sale',
+            'trade_type', 'trade_type_display',
             'pi_date', 'currency', 'conversion_rate', 'payment_due_date',
             'lc_number', 'exporter_beneficiary', 'exporter_reference',
             'gst_number', 'consignee', 'applicant_importer',
@@ -533,7 +536,7 @@ class ProformaInvoiceSerializer(serializers.ModelSerializer):
         return None
 
     def get_is_stock_sale(self, obj):
-        return obj.requisition is None
+        return obj.source == 'STOCK_SALE'
 
     def get_locked_by_name(self, obj):
         if obj.locked_by:
@@ -552,6 +555,12 @@ class PIItemCreateSerializer(serializers.Serializer):
 
 class ProformaInvoiceCreateSerializer(serializers.Serializer):
     requisition = serializers.UUIDField(required=False, allow_null=True)
+    source      = serializers.ChoiceField(
+        choices=['STOCK_SALE', 'DIRECT'], required=False, allow_null=True
+    )
+    trade_type  = serializers.ChoiceField(
+        choices=['DOMESTIC', 'INTERNATIONAL'], required=False
+    )
     pi_date     = serializers.DateField()
     currency    = serializers.CharField(default='INR')
     conversion_rate = serializers.DecimalField(max_digits=10, decimal_places=4, required=False, allow_null=True)
@@ -602,6 +611,7 @@ class ProformaInvoiceCreateSerializer(serializers.Serializer):
         items = data.get('items', [])
 
         if requisition_id:
+            data['source'] = 'REQUISITION'
             not_purchased = []
             already_in_pi = []
             for item in items:
@@ -661,17 +671,27 @@ class ProformaInvoiceCreateSerializer(serializers.Serializer):
                     'items': ' | '.join(errors)
                 })
         else:
-            insufficient_stock = []
-            for item in items:
-                product = Product.objects.get(id=item['product'])
-                if product.current_stock < Decimal(str(item['quantity'])):
-                    insufficient_stock.append(
-                        f"{product.item_name} (stock: {product.current_stock}, requested: {item['quantity']})"
-                    )
-            if insufficient_stock:
-                raise serializers.ValidationError({
-                    'items': f"Insufficient stock for direct sale: {', '.join(insufficient_stock)}"
-                })
+            # No requisition -> either a Stock Sale or a Direct PI.
+            # Default to STOCK_SALE (fail-closed) so stock is never silently oversold.
+            source = data.get('source')
+            if source not in ('STOCK_SALE', 'DIRECT'):
+                source = 'STOCK_SALE'
+            data['source'] = source
+
+            # Stock Sale must respect on-hand quantity. Direct PI (phone rate /
+            # ad-hoc) is not bound to stock, so it skips this guard.
+            if source == 'STOCK_SALE':
+                insufficient_stock = []
+                for item in items:
+                    product = Product.objects.get(id=item['product'])
+                    if product.current_stock < Decimal(str(item['quantity'])):
+                        insufficient_stock.append(
+                            f"{product.item_name} (stock: {product.current_stock}, requested: {item['quantity']})"
+                        )
+                if insufficient_stock:
+                    raise serializers.ValidationError({
+                        'items': f"Insufficient stock for stock sale: {', '.join(insufficient_stock)}"
+                    })
 
         return data
 
@@ -706,6 +726,15 @@ class ProformaInvoiceCreateSerializer(serializers.Serializer):
                 )
 
             pi.calculate_total()
+
+            # Direct PI: auto-create a backing requisition so its items become
+            # visible to purchasing and cost/revenue (P&L) tracking works.
+            if pi.source == 'DIRECT' and pi.requisition_id is None:
+                from .procurement import (
+                    auto_create_requisition_for_direct_pi, notify_purchase_pending,
+                )
+                auto_create_requisition_for_direct_pi(pi, created_by)
+                notify_purchase_pending(pi, created_by)
 
         return pi
 

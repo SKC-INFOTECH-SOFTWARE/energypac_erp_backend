@@ -61,6 +61,7 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
+        from signatures.notifications import notify_module
         for po in pos:
             AuditLog.log(request.user, 'CREATE', po, {
                 'po_number': po.po_number,
@@ -68,6 +69,15 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
                 'total_amount': str(po.total_amount),
                 'currency': po.currency,
             })
+            notify_module(
+                'PURCHASE',
+                notification_type='PURCHASE_ORDER_CREATED',
+                title='New Purchase Order',
+                message=f'PO {po.po_number} created for {po.vendor.vendor_name} ({po.currency} {po.total_amount}).',
+                obj=po,
+                actor=request.user,
+                action_url='/purchase-orders',
+            )
 
         return Response(
             {

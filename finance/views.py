@@ -189,6 +189,17 @@ class PurchaseOrderFinanceViewSet(viewsets.ReadOnlyModelViewSet):
             'balance_after': str(po.balance),
         })
 
+        from signatures.notifications import notify_module
+        notify_module(
+            'FINANCE',
+            notification_type='PAYMENT_RECORDED',
+            title='PO Payment Recorded',
+            message=f'Payment of {po.currency} {amount} recorded for PO {po.po_number}. Balance: {po.currency} {po.balance}.',
+            obj=payment,
+            actor=request.user,
+            action_url='/finance',
+        )
+
         return Response({
             'message': 'Payment recorded successfully',
             'payment_number': payment_number,
@@ -367,6 +378,17 @@ class PIFinanceViewSet(viewsets.ReadOnlyModelViewSet):
             'balance_after': str(pi.balance),
         })
 
+        from signatures.notifications import notify_module
+        notify_module(
+            'FINANCE',
+            notification_type='PAYMENT_RECORDED',
+            title='PI Payment Received',
+            message=f'Payment of {pi.currency} {amount} received for PI {pi.pi_number}. Balance: {pi.currency} {pi.balance}.',
+            obj=payment,
+            actor=request.user,
+            action_url='/finance',
+        )
+
         return Response({
             'message': 'Payment recorded successfully',
             'payment_number': payment_number,
@@ -476,7 +498,9 @@ class AdvancePaymentViewSet(viewsets.ModelViewSet):
     queryset = AdvancePayment.objects.all().select_related('proforma_invoice', 'recorded_by')
     serializer_class = AdvancePaymentSerializer
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
-    filterset_fields = ['status', 'currency', 'proforma_invoice']
+    # trade_type splits Domestic/International; source splits Requisition/Stock/Direct
+    filterset_fields = ['status', 'currency', 'proforma_invoice',
+                        'proforma_invoice__trade_type', 'proforma_invoice__source']
     search_fields = ['advance_number', 'client_name', 'proforma_invoice__pi_number']
     ordering = ['-created_at']
 
@@ -490,6 +514,16 @@ class AdvancePaymentViewSet(viewsets.ModelViewSet):
             'currency': advance.currency,
             'client_name': advance.client_name,
         })
+        from signatures.notifications import notify_module
+        notify_module(
+            'FINANCE',
+            notification_type='ADVANCE_PAYMENT_RECORDED',
+            title='Advance Payment Recorded',
+            message=f'Advance {advance.advance_number} of {advance.currency} {advance.amount} for PI {advance.proforma_invoice.pi_number}.',
+            obj=advance,
+            actor=self.request.user,
+            action_url='/finance',
+        )
 
     @action(detail=True, methods=['post'])
     @transaction.atomic
@@ -606,6 +640,14 @@ class ProfitLossReportView(APIView):
             )['total'] or 0)
 
             transport_total = transport_po + transport_pi
+
+            # Freight recovered from the client on sell-side shipments (PI transport receipts)
+            transport_recovered = float(TransportEntry.objects.filter(
+                proforma_invoice__requisition=req
+            ).exclude(status='CANCELLED').aggregate(
+                total=Sum('amount_paid')
+            )['total'] or 0)
+
             total_cost = po_total_inr + transport_total
 
             pis = ProformaInvoice.objects.filter(
@@ -632,6 +674,7 @@ class ProfitLossReportView(APIView):
                 'requisition_date': req.requisition_date.isoformat() if req.requisition_date else None,
                 'purchase_cost_inr': float(po_total_inr),
                 'transport_cost_inr': float(transport_total),
+                'transport_recovered_inr': float(transport_recovered),
                 'total_cost_inr': float(total_cost),
                 'sales_revenue_inr': float(pi_total_inr),
                 'profit_loss_inr': float(profit_loss),
@@ -678,6 +721,7 @@ class ProfitLossReportView(APIView):
                 'requisition_date': None,
                 'purchase_cost_inr': float(stock_cost_inr),
                 'transport_cost_inr': 0,
+                'transport_recovered_inr': 0,
                 'total_cost_inr': float(stock_cost_inr),
                 'sales_revenue_inr': float(stock_revenue_inr),
                 'profit_loss_inr': float(stock_pl),
@@ -695,12 +739,195 @@ class ProfitLossReportView(APIView):
             'summary': {
                 'total_purchase_cost': sum(r['purchase_cost_inr'] for r in results),
                 'total_transport_cost': sum(r['transport_cost_inr'] for r in results),
+                'total_transport_recovered': sum(r.get('transport_recovered_inr', 0) for r in results),
                 'total_cost': total_cost_all,
                 'total_revenue': total_revenue_all,
                 'total_profit_loss': total_pl,
                 'overall_margin': round((total_pl / total_revenue_all * 100), 2) if total_revenue_all > 0 else 0,
             },
             'requisitions': results,
+        })
+
+
+class RevenueAnalyticsView(APIView):
+    """
+    Enterprise revenue & profitability analytics — KPIs, monthly trend,
+    breakdowns by trade type & PI source, and top / bottom performers.
+    All money in INR. Optional filters: ?fy=2026-2027&trade_type=&source=
+    """
+    permission_classes = [FinanceModulePermission]
+
+    def _fy_bounds(self, fy):
+        try:
+            y = int(fy.split('-')[0])
+            return date_type(y, 4, 1), date_type(y + 1, 3, 31)
+        except (ValueError, IndexError, AttributeError):
+            return None, None
+
+    def get(self, request):
+        fy = request.query_params.get('fy')
+        f_trade = request.query_params.get('trade_type')
+        f_source = request.query_params.get('source')
+        fy_start, fy_end = self._fy_bounds(fy) if fy else (None, None)
+
+        deals = []  # one per requisition + one per pure stock-sale PI
+
+        # ── Requisition-backed deals ─────────────────────────────────────────
+        for req in Requisition.objects.all():
+            pis = list(ProformaInvoice.objects.filter(requisition=req).exclude(status='CANCELLED'))
+            if not pis:
+                continue
+            deal_date = req.requisition_date or min((p.pi_date for p in pis), default=None)
+            if fy_start and deal_date and not (fy_start <= deal_date <= fy_end):
+                continue
+            pos = PurchaseOrder.objects.filter(requisition=req).exclude(status='CANCELLED')
+            purchase = sum(_to_inr(po.total_amount, po.currency, po.conversion_rate) for po in pos)
+            transport = float(TransportEntry.objects.filter(
+                Q(purchase_order__requisition=req) | Q(proforma_invoice__requisition=req)
+            ).exclude(status='CANCELLED').aggregate(t=Sum('total_cost'))['t'] or 0)
+            revenue = sum(_to_inr(p.grand_total, p.currency, p.conversion_rate) for p in pis)
+            tts = {p.trade_type for p in pis}
+            srcs = {p.source for p in pis}
+            deals.append({
+                'label': req.requisition_number, 'date': deal_date,
+                'revenue': revenue, 'cost': purchase + transport,
+                'trade_type': tts.pop() if len(tts) == 1 else 'MIXED',
+                'source': srcs.pop() if len(srcs) == 1 else 'MIXED',
+            })
+
+        # ── Pure stock-sale PIs (no requisition) ─────────────────────────────
+        for pi in ProformaInvoice.objects.filter(requisition__isnull=True).exclude(status='CANCELLED'):
+            deal_date = pi.pi_date
+            if fy_start and deal_date and not (fy_start <= deal_date <= fy_end):
+                continue
+            revenue = _to_inr(pi.grand_total, pi.currency, pi.conversion_rate)
+            cost = 0.0
+            for pii in pi.items.select_related('product').all():
+                lp = PurchaseOrderItem.objects.filter(
+                    product=pii.product, is_received=True,
+                ).exclude(po__status='CANCELLED').select_related('po').order_by('-po__po_date').first()
+                if lp:
+                    rate = Decimal('1') if lp.po.currency == 'INR' else (lp.po.conversion_rate or Decimal('1'))
+                    cost += float(lp.rate * pii.quantity * rate)
+            deals.append({
+                'label': pi.pi_number, 'date': deal_date,
+                'revenue': revenue, 'cost': cost,
+                'trade_type': pi.trade_type, 'source': pi.source or 'STOCK_SALE',
+            })
+
+        if f_trade in ('DOMESTIC', 'INTERNATIONAL'):
+            deals = [d for d in deals if d['trade_type'] == f_trade]
+        if f_source in ('REQUISITION', 'STOCK_SALE', 'DIRECT'):
+            deals = [d for d in deals if d['source'] == f_source]
+
+        for d in deals:
+            d['profit'] = d['revenue'] - d['cost']
+            d['margin'] = round((d['profit'] / d['revenue'] * 100), 2) if d['revenue'] > 0 else 0.0
+
+        # ── KPIs ─────────────────────────────────────────────────────────────
+        revenue_total = sum(d['revenue'] for d in deals)
+        cost_total = sum(d['cost'] for d in deals)
+        profit_total = revenue_total - cost_total
+        with_rev = [d for d in deals if d['revenue'] > 0]
+        margins = [d['margin'] for d in with_rev]
+        kpis = {
+            'revenue': round(revenue_total, 2), 'cost': round(cost_total, 2),
+            'profit': round(profit_total, 2),
+            'margin': round((profit_total / revenue_total * 100), 2) if revenue_total > 0 else 0,
+            'deals': len(with_rev),
+            'avg_deal': round(revenue_total / len(with_rev), 2) if with_rev else 0,
+            'profit_count': sum(1 for d in deals if d['profit'] > 0),
+            'loss_count': sum(1 for d in deals if d['profit'] < 0),
+            'best_margin': max(margins) if margins else 0,
+            'worst_margin': min(margins) if margins else 0,
+        }
+
+        # ── Monthly trend ────────────────────────────────────────────────────
+        monthly = {}
+        for d in deals:
+            if not d['date']:
+                continue
+            key = d['date'].strftime('%Y-%m')
+            m = monthly.setdefault(key, {'month': key, 'revenue': 0.0, 'cost': 0.0, 'profit': 0.0})
+            m['revenue'] += d['revenue']; m['cost'] += d['cost']; m['profit'] += d['profit']
+        monthly_list = [
+            {'month': v['month'], 'revenue': round(v['revenue'], 2),
+             'cost': round(v['cost'], 2), 'profit': round(v['profit'], 2)}
+            for v in sorted(monthly.values(), key=lambda x: x['month'])
+        ]
+
+        # ── Breakdowns ───────────────────────────────────────────────────────
+        def breakdown(key, buckets):
+            out = {}
+            for b in buckets:
+                rows = [d for d in deals if d[key] == b]
+                rev = sum(d['revenue'] for d in rows)
+                cst = sum(d['cost'] for d in rows)
+                out[b] = {
+                    'revenue': round(rev, 2), 'cost': round(cst, 2),
+                    'profit': round(rev - cst, 2), 'count': len(rows),
+                    'margin': round(((rev - cst) / rev * 100), 2) if rev > 0 else 0,
+                }
+            return out
+
+        # ── Service revenue (separate from goods margin — INR) ───────────────
+        # Service invoices are standalone GST/INR revenue with no goods COGS,
+        # so they are reported separately rather than folded into the margin.
+        from domestic.models import TaxInvoice
+        svc = TaxInvoice.objects.filter(kind='SERVICE').exclude(status='CANCELLED')
+        if fy_start:
+            svc = svc.filter(invoice_date__gte=fy_start, invoice_date__lte=fy_end)
+        svc_agg = svc.aggregate(
+            billed=Sum('total_amount_after_tax'),
+            received=Sum('amount_paid'),
+            outstanding=Sum('balance'),
+        )
+        service_block = {
+            'invoices': svc.count(),
+            'billed': round(float(svc_agg['billed'] or 0), 2),
+            'received': round(float(svc_agg['received'] or 0), 2),
+            'outstanding': round(float(svc_agg['outstanding'] or 0), 2),
+        }
+
+        # ── Transport freight (informational) ────────────────────────────────
+        # Freight we PAY on purchases (buy) + on sales delivery (sell), and the
+        # portion of sell-side freight RECOVERED from clients (sell-side receipts).
+        t_entries = TransportEntry.objects.exclude(status='CANCELLED')
+        if fy_start:
+            t_entries = t_entries.filter(dispatch_date__gte=fy_start, dispatch_date__lte=fy_end)
+        buy_agg = t_entries.filter(purchase_order__isnull=False).aggregate(
+            billed=Sum('total_cost'), paid=Sum('amount_paid'))
+        sell_agg = t_entries.filter(proforma_invoice__isnull=False).aggregate(
+            billed=Sum('total_cost'), recovered=Sum('amount_paid'))
+        freight_buy = float(buy_agg['billed'] or 0)
+        freight_sell = float(sell_agg['billed'] or 0)
+        freight_recovered = float(sell_agg['recovered'] or 0)
+        transport_block = {
+            'freight_paid_buy': round(freight_buy, 2),
+            'freight_paid_sell': round(freight_sell, 2),
+            'freight_paid_total': round(freight_buy + freight_sell, 2),
+            'freight_recovered_sell': round(freight_recovered, 2),
+            'net_freight_cost': round(freight_buy + freight_sell - freight_recovered, 2),
+        }
+
+        # ── Top / bottom performers ──────────────────────────────────────────
+        ranked = sorted(with_rev, key=lambda d: d['profit'], reverse=True)
+
+        def slim(d):
+            return {'label': d['label'], 'revenue': round(d['revenue'], 2),
+                    'cost': round(d['cost'], 2), 'profit': round(d['profit'], 2),
+                    'margin': d['margin'], 'trade_type': d['trade_type'], 'source': d['source']}
+
+        return Response({
+            'currency': 'INR',
+            'kpis': kpis,
+            'monthly': monthly_list,
+            'by_trade_type': breakdown('trade_type', ['DOMESTIC', 'INTERNATIONAL']),
+            'by_source': breakdown('source', ['REQUISITION', 'STOCK_SALE', 'DIRECT']),
+            'transport': transport_block,
+            'service': service_block,
+            'top_profit': [slim(d) for d in ranked[:5]],
+            'top_loss': [slim(d) for d in reversed(ranked) if d['profit'] < 0][:5],
         })
 
 
@@ -1433,4 +1660,159 @@ class FinanceDashboardView(APIView):
             },
             'recent_outgoing': PurchasePaymentSerializer(recent_outgoing, many=True).data,
             'recent_incoming': PIPaymentSerializer(recent_incoming, many=True).data,
+        })
+
+
+class FinanceReceivablesByCategoryView(APIView):
+    """
+    Client receivables (incoming) filtered by PI category — for the dashboard's
+    Domestic/International + source breakdown panel. All totals INR-equivalent.
+    GET /api/finance/receivables?trade_type=DOMESTIC&source=DIRECT
+    """
+    permission_classes = [FinanceModulePermission]
+
+    def get(self, request):
+        trade_type = request.query_params.get('trade_type')   # DOMESTIC | INTERNATIONAL
+        source = request.query_params.get('source')           # REQUISITION | STOCK_SALE | DIRECT
+
+        pis = ProformaInvoice.objects.exclude(status='CANCELLED')
+        advances = AdvancePayment.objects.filter(status='ACTIVE')
+        if trade_type in ('DOMESTIC', 'INTERNATIONAL'):
+            pis = pis.filter(trade_type=trade_type)
+            advances = advances.filter(proforma_invoice__trade_type=trade_type)
+        if source in ('REQUISITION', 'STOCK_SALE', 'DIRECT'):
+            pis = pis.filter(source=source)
+            advances = advances.filter(proforma_invoice__source=source)
+
+        total_value = sum(_to_inr(pi.grand_total, pi.currency, pi.conversion_rate) for pi in pis)
+        total_received = sum(_to_inr(pi.amount_received, pi.currency, pi.conversion_rate) for pi in pis)
+        outstanding = max(total_value - total_received, 0)
+        advance_remaining = sum(
+            _to_inr(a.remaining, a.currency, a.conversion_rate) for a in advances
+        )
+
+        return Response({
+            'currency': 'INR',
+            'pi_count': pis.count(),
+            'total_value': float(total_value),
+            'total_received': float(total_received),
+            'outstanding': float(outstanding),
+            'advance_remaining': float(advance_remaining),
+        })
+
+
+class EnterpriseOverviewView(APIView):
+    """
+    Consolidated enterprise money-movement — everything in INR.
+
+    MONEY IN  : goods sales collected, service collected, client advances,
+                freight recovered from clients.
+    MONEY OUT : payments to vendors (purchases), freight paid to transporters.
+    Also returns outstanding (still to collect / still to pay) for context.
+    GET /api/finance/overview?fy=2026-2027
+    """
+    permission_classes = [FinanceModulePermission]
+
+    def _bounds(self, fy):
+        try:
+            y = int(fy.split('-')[0])
+            return date_type(y, 4, 1), date_type(y + 1, 3, 31)
+        except (ValueError, IndexError, AttributeError):
+            return None, None
+
+    def get(self, request):
+        from domestic.models import TaxInvoice
+        from transport.models import TransportPayment
+        from billing.models import PIBill, PIBillPayment
+
+        fy = request.query_params.get('fy')
+        fy_start, fy_end = self._bounds(fy) if fy else (None, None)
+
+        def drange(qs, field):
+            return qs.filter(**{f'{field}__gte': fy_start, f'{field}__lte': fy_end}) if fy_start else qs
+
+        # ── MONEY IN ─────────────────────────────────────────────────────────
+        # 1. Goods sales collected (PI Bill payments) → convert to INR via bill rate
+        bill_pay = drange(
+            PIBillPayment.objects.select_related('pi_bill'),
+            'payment_date',
+        )
+        goods_in = sum(
+            _to_inr(p.amount, p.pi_bill.currency, p.pi_bill.conversion_rate)
+            for p in bill_pay
+        )
+        # 2. Client advances received (already stored in INR)
+        adv = drange(AdvancePayment.objects.all(), 'payment_date')
+        advance_in = float(adv.aggregate(s=Sum('amount_inr'))['s'] or 0)
+        # 3. Service collected (INR)
+        svc = drange(TaxInvoice.objects.filter(kind='SERVICE').exclude(status='CANCELLED'), 'invoice_date')
+        service_in = float(svc.aggregate(s=Sum('amount_paid'))['s'] or 0)
+        service_out_standing = float(svc.aggregate(s=Sum('balance'))['s'] or 0)
+        # 4. Freight recovered from clients (sell-side transport receipts, INR)
+        t_sell = drange(
+            TransportPayment.objects.filter(transport_entry__proforma_invoice__isnull=False)
+            .exclude(transport_entry__status='CANCELLED'),
+            'payment_date',
+        )
+        freight_recovered = float(t_sell.aggregate(s=Sum('amount'))['s'] or 0)
+
+        # ── MONEY OUT ────────────────────────────────────────────────────────
+        # 1. Payments to vendors (purchases) → convert to INR via PO rate
+        po_pay = drange(
+            PurchasePayment.objects.filter(payment_status='COMPLETED').select_related('purchase_order'),
+            'payment_date',
+        )
+        purchases_out = sum(
+            _to_inr(p.amount, p.purchase_order.currency, p.purchase_order.conversion_rate)
+            for p in po_pay
+        )
+        # 2. Freight paid to transporters (buy-side, INR)
+        t_buy = drange(
+            TransportPayment.objects.filter(transport_entry__purchase_order__isnull=False)
+            .exclude(transport_entry__status='CANCELLED'),
+            'payment_date',
+        )
+        freight_paid_buy = float(t_buy.aggregate(s=Sum('amount'))['s'] or 0)
+
+        money_in = {
+            'goods_sales': round(float(goods_in), 2),
+            'service': round(service_in, 2),
+            'advances': round(advance_in, 2),
+            'freight_recovered': round(freight_recovered, 2),
+        }
+        money_out = {
+            'purchases': round(float(purchases_out), 2),
+            'freight_paid': round(freight_paid_buy, 2),
+        }
+        total_in = round(sum(money_in.values()), 2)
+        total_out = round(sum(money_out.values()), 2)
+
+        # ── Outstanding (context — not cash yet) ─────────────────────────────
+        # Receivable = billed-but-unpaid (PI Bills) + unpaid service invoices
+        receivable = sum(
+            _to_inr(b.balance, b.currency, b.conversion_rate)
+            for b in PIBill.objects.all()
+        ) + service_out_standing
+        payable = sum(
+            _to_inr(po.balance, po.currency, po.conversion_rate)
+            for po in PurchaseOrder.objects.exclude(status='CANCELLED')
+        )
+        freight_payable = float(
+            TransportEntry.objects.exclude(status='CANCELLED')
+            .aggregate(s=Sum('balance'))['s'] or 0
+        )
+
+        return Response({
+            'currency': 'INR',
+            'fy': fy or 'ALL',
+            'money_in': money_in,
+            'money_out': money_out,
+            'total_in': total_in,
+            'total_out': total_out,
+            'net_cash': round(total_in - total_out, 2),
+            'outstanding': {
+                'receivable_from_clients': round(float(receivable), 2),
+                'payable_to_vendors': round(float(payable), 2),
+                'freight_payable': round(freight_payable, 2),
+            },
         })

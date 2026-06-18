@@ -38,6 +38,16 @@ class SalesReturnViewSet(viewsets.ModelViewSet):
             'pi_number': sr.proforma_invoice.pi_number,
             'total': str(sr.total_return_amount),
         })
+        from signatures.notifications import notify_module
+        notify_module(
+            'RETURNS',
+            notification_type='SALES_RETURN_CREATED',
+            title='New Sales Return',
+            message=f'Sales return {sr.return_number} against PI {sr.proforma_invoice.pi_number} ({sr.total_return_amount}).',
+            obj=sr,
+            actor=self.request.user,
+            action_url='/returns',
+        )
 
     @action(detail=True, methods=['post'])
     def approve(self, request, pk=None):
@@ -187,6 +197,16 @@ class PurchaseReturnViewSet(viewsets.ModelViewSet):
             'po_number': pr.purchase_order.po_number,
             'total': str(pr.total_return_amount),
         })
+        from signatures.notifications import notify_module
+        notify_module(
+            'RETURNS',
+            notification_type='PURCHASE_RETURN_CREATED',
+            title='New Purchase Return',
+            message=f'Purchase return {pr.return_number} against PO {pr.purchase_order.po_number} ({pr.total_return_amount}).',
+            obj=pr,
+            actor=self.request.user,
+            action_url='/returns',
+        )
 
     @action(detail=True, methods=['post'])
     def approve(self, request, pk=None):

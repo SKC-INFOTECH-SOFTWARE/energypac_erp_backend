@@ -427,7 +427,7 @@ class ProformaInvoiceViewSet(viewsets.ModelViewSet):
     serializer_class = ProformaInvoiceSerializer
 
     filter_backends  = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
-    filterset_fields = ['requisition', 'status', 'currency']
+    filterset_fields = ['requisition', 'status', 'currency', 'source', 'trade_type']
     search_fields    = ['pi_number', 'requisition__requisition_number']
     ordering         = ['-pi_number']
 
@@ -442,10 +442,58 @@ class ProformaInvoiceViewSet(viewsets.ModelViewSet):
         pi = serializer.save(created_by=self.request.user)
         AuditLog.log(self.request.user, 'CREATE', pi, {
             'pi_number': pi.pi_number,
-            'requisition': pi.requisition.requisition_number if pi.requisition else 'STOCK SALE',
+            'source': pi.get_source_display(),
+            'requisition': pi.requisition.requisition_number if pi.requisition else pi.get_source_display(),
             'currency': pi.currency,
             'grand_total': str(pi.grand_total),
         })
+        from signatures.notifications import notify_module
+        notify_module(
+            'SALES',
+            notification_type='PI_CREATED',
+            title='New Proforma Invoice',
+            message=f'PI {pi.pi_number} created ({pi.currency} {pi.grand_total}).',
+            obj=pi,
+            actor=self.request.user,
+            action_url='/proforma-invoices',
+        )
+
+    # ── Procurement visibility (which PI items still need buying) ─────────
+
+    @action(detail=True, methods=['get'])
+    def procurement(self, request, pk=None):
+        """Per-item ordered/received/pending status for one PI."""
+        from .procurement import pi_procurement_summary
+        pi = self.get_object()
+        return Response(pi_procurement_summary(pi))
+
+    @action(detail=False, methods=['get'])
+    def pending_purchase(self, request):
+        """
+        PIs that still have items not fully on a PO.
+        GET /api/proforma-invoices/pending_purchase?source=DIRECT
+        """
+        from .procurement import pi_procurement_summary
+        source = request.query_params.get('source', 'DIRECT')
+        qs = self.get_queryset().exclude(status='CANCELLED')
+        if source in ('DIRECT', 'STOCK_SALE', 'REQUISITION'):
+            qs = qs.filter(source=source)
+
+        results = []
+        for pi in qs:
+            summary = pi_procurement_summary(pi)
+            if summary['pending_items'] > 0:
+                results.append({
+                    'pi_id': str(pi.id),
+                    'pi_number': pi.pi_number,
+                    'pi_date': pi.pi_date.isoformat() if pi.pi_date else None,
+                    'applicant_importer': pi.applicant_importer,
+                    'consignee': pi.consignee,
+                    'source': pi.source,
+                    'currency': pi.currency,
+                    **summary,
+                })
+        return Response({'count': len(results), 'results': results})
 
     # ── Edit with revision tracking ──────────────────────────────────────
 

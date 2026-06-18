@@ -40,7 +40,17 @@ class RequisitionViewSet(viewsets.ModelViewSet):
         return RequisitionSerializer
 
     def perform_create(self, serializer):
-        serializer.save(created_by=self.request.user)
+        requisition = serializer.save(created_by=self.request.user)
+        from signatures.notifications import notify_module
+        notify_module(
+            'PURCHASE',
+            notification_type='REQUISITION_CREATED',
+            title='New Requisition',
+            message=f'Requisition {requisition.requisition_number} created.',
+            obj=requisition,
+            actor=self.request.user,
+            action_url='/requisitions',
+        )
 
     def destroy(self, request, *args, **kwargs):
         return Response(

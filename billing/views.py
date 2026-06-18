@@ -3,6 +3,8 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from django_filters.rest_framework import DjangoFilterBackend
 from django.db import transaction
+from django.db.models import Sum, Count, F, Value, DecimalField
+from django.db.models.functions import Coalesce
 from decimal import Decimal
 from datetime import date as date_type, datetime
 
@@ -20,7 +22,8 @@ class PIBillViewSet(viewsets.ModelViewSet):
     ).prefetch_related('pi_bill_items__product')
 
     filter_backends  = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
-    filterset_fields = ['status', 'proforma_invoice', 'bill_date', 'bill_type']
+    # 'proforma_invoice__source' lets us split bills by PI category (Requisition / Stock / Direct)
+    filterset_fields = ['status', 'proforma_invoice', 'bill_date', 'bill_type', 'proforma_invoice__source']
     search_fields    = ['bill_number', 'client_name', 'proforma_invoice__pi_number']
     ordering_fields  = ['bill_date', 'created_at', 'bill_number']
     ordering         = ['-bill_number']
@@ -190,6 +193,33 @@ class PIBillViewSet(viewsets.ModelViewSet):
         return Response({
             'total_bills': bills.count(),
             'bills': PIBillSerializer(bills, many=True).data,
+        })
+
+    @action(detail=False, methods=['get'])
+    def summary(self, request):
+        """
+        Totals for the current tab/category selection.
+        Honours the same query params as the list (bill_type, proforma_invoice__source,
+        search, status). Money totals exclude CANCELLED bills.
+        GET /api/pi-bills/summary?bill_type=DOMESTIC&proforma_invoice__source=DIRECT
+        """
+        qs = self.filter_queryset(self.get_queryset()).exclude(status='CANCELLED')
+        # INR-equivalent so international bills in mixed currencies sum meaningfully.
+        dec = DecimalField(max_digits=20, decimal_places=2)
+        rate = Coalesce('conversion_rate', Value(Decimal('1')),
+                        output_field=DecimalField(max_digits=20, decimal_places=4))
+        agg = qs.aggregate(
+            count=Count('id'),
+            total_billed=Sum(F('net_payable') * rate, output_field=dec),
+            total_received=Sum(F('amount_paid') * rate, output_field=dec),
+            total_outstanding=Sum(F('balance') * rate, output_field=dec),
+        )
+        return Response({
+            'count': agg['count'] or 0,
+            'currency': 'INR',  # totals are INR-equivalent
+            'total_billed': float(agg['total_billed'] or 0),
+            'total_received': float(agg['total_received'] or 0),
+            'total_outstanding': float(agg['total_outstanding'] or 0),
         })
 
     @action(detail=False, methods=['get'])
