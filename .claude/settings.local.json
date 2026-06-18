@@ -115,7 +115,9 @@
       "Bash(grep -l \"apiGet\\(\\\\`/api/po\\\\|apiGet\\(\\\\`/api/pi\" frontend/src/components/purchaseOrder/PurchaseOrderModal.jsx frontend/src/components/sales/ClientQuotationDetailsModal.jsx)",
       "Bash(./venv/Scripts/python.exe manage.py makemigrations signatures)",
       "Bash(./venv/Scripts/python.exe manage.py migrate signatures)",
-      "Bash(timeout 220 npx vite build)"
+      "Bash(timeout 220 npx vite build)",
+      "Bash(./venv/Scripts/python.exe -c \"import PIL; print\\('Pillow', PIL.__version__\\)\")",
+      "Bash(./venv/Scripts/python.exe -c \"from signatures import pdf_service, pdf_overlay_service; print\\('PDF services import OK'\\)\")"
     ]
   }
 }
