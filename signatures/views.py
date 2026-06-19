@@ -154,12 +154,28 @@ class SignatureViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=['post'], parser_classes=(MultiPartParser, FormParser))
     def upload(self, request):
-        """Upload a new signature"""
+        """
+        Upload a signature.
+
+        A profile may only ever have ONE current signature. Uploading a new one
+        replaces the old: any existing non-deleted signatures for this user are
+        soft-deleted first. We soft-delete (not hard-delete) so that documents
+        already signed with the old signature keep resolving their base64 image
+        for historical PDFs / audit.
+        """
+        from django.db import transaction
+
         serializer = SignatureUploadSerializer(data=request.data, context={'request': request})
-        if serializer.is_valid():
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        with transaction.atomic():
+            UserSignature.objects.filter(
+                user=request.user, is_deleted=False
+            ).update(is_deleted=True, is_active=False)
             serializer.save()
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
 
     @action(detail=True, methods=['patch'])
     def set_active(self, request, pk=None):

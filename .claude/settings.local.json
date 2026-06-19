@@ -118,7 +118,9 @@
       "Bash(timeout 220 npx vite build)",
       "Bash(./venv/Scripts/python.exe -c \"import PIL; print\\('Pillow', PIL.__version__\\)\")",
       "Bash(./venv/Scripts/python.exe -c \"from signatures import pdf_service, pdf_overlay_service; print\\('PDF services import OK'\\)\")",
-      "Bash(grep -nE \"\\\\\\\\\\\\$\\\\{BASE_URL\\\\}|BASE_URL\\\\b\" frontend/src/Pages/Login.jsx)"
+      "Bash(grep -nE \"\\\\\\\\\\\\$\\\\{BASE_URL\\\\}|BASE_URL\\\\b\" frontend/src/Pages/Login.jsx)",
+      "Bash(npx vite *)",
+      "Bash(node *)"
     ]
   }
 }
