@@ -120,7 +120,8 @@
       "Bash(./venv/Scripts/python.exe -c \"from signatures import pdf_service, pdf_overlay_service; print\\('PDF services import OK'\\)\")",
       "Bash(grep -nE \"\\\\\\\\\\\\$\\\\{BASE_URL\\\\}|BASE_URL\\\\b\" frontend/src/Pages/Login.jsx)",
       "Bash(npx vite *)",
-      "Bash(node *)"
+      "Bash(node *)",
+      "Bash(./venv/Scripts/python.exe *)"
     ]
   }
 }

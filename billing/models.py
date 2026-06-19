@@ -107,6 +107,55 @@ class PIBill(models.Model):
         return f"{self.bill_number} - {self.client_name}"
 
 
+def get_pi_billing_status(pi):
+    """
+    Quantity-level billing progress for a Proforma Invoice.
+
+    A PI line (ProformaInvoiceItem) may be billed across several bills until its
+    full ordered quantity is covered — partial billing. Cancelled bills don't
+    count. Returns (items, is_fully_billed):
+
+      items: one dict per PI line with ordered / billed / remaining quantity.
+      is_fully_billed: True only when every line's remaining quantity is <= 0
+                       (so a fully-billed PI can never be billed again, while an
+                       incompletely-billed PI can still bill its remainder).
+    """
+    from django.db.models import Sum
+
+    billed_rows = (
+        PIBillItem.objects
+        .filter(pi_bill__proforma_invoice=pi, pi_item__isnull=False)
+        .exclude(pi_bill__status='CANCELLED')
+        .values('pi_item')
+        .annotate(q=Sum('quantity'))
+    )
+    billed = {row['pi_item']: (row['q'] or Decimal('0')) for row in billed_rows}
+
+    items = []
+    fully_billed = True
+    for it in pi.items.select_related('product').all():
+        ordered = it.quantity or Decimal('0')
+        done = billed.get(it.id, Decimal('0'))
+        remaining = ordered - done
+        if remaining > 0:
+            fully_billed = False
+        items.append({
+            'pi_item': str(it.id),
+            'product': str(it.product_id) if it.product_id else None,
+            'product_name': it.product.item_name if it.product else '',
+            'product_code': it.product.item_code if it.product else '',
+            'hsn_code': it.hsn_code or '',
+            'unit': it.product.unit if it.product else 'PCS',
+            'unit_price': it.unit_price,
+            'ordered_qty': ordered,
+            'billed_qty': done,
+            'remaining_qty': remaining if remaining > 0 else Decimal('0'),
+        })
+
+    # An empty PI (no lines) is not meaningfully "fully billed".
+    return items, (fully_billed and len(items) > 0)
+
+
 class PIBillItem(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     pi_bill = models.ForeignKey(PIBill, on_delete=models.CASCADE, related_name='pi_bill_items')

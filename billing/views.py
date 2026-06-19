@@ -196,6 +196,43 @@ class PIBillViewSet(viewsets.ModelViewSet):
         })
 
     @action(detail=False, methods=['get'])
+    def billable_items(self, request):
+        """
+        Remaining (unbilled) quantity per PI line, for quantity-level partial
+        billing. The Create Bill screen uses this to pre-fill only what's left to
+        bill, and to block when the PI is already fully billed.
+        GET /api/pi-bills/billable_items?proforma_invoice=<uuid>
+        """
+        from sales.models import ProformaInvoice
+        from .models import get_pi_billing_status
+
+        pi_id = request.query_params.get('proforma_invoice')
+        if not pi_id:
+            return Response({'error': 'proforma_invoice parameter is required'}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            pi = ProformaInvoice.objects.get(id=pi_id)
+        except ProformaInvoice.DoesNotExist:
+            return Response({'error': 'Proforma Invoice not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        raw_items, fully = get_pi_billing_status(pi)
+        items = [
+            {
+                **it,
+                'unit_price': float(it['unit_price']),
+                'ordered_qty': float(it['ordered_qty']),
+                'billed_qty': float(it['billed_qty']),
+                'remaining_qty': float(it['remaining_qty']),
+            }
+            for it in raw_items
+        ]
+        return Response({
+            'proforma_invoice': str(pi.id),
+            'pi_number': pi.pi_number,
+            'is_fully_billed': fully,
+            'items': items,
+        })
+
+    @action(detail=False, methods=['get'])
     def summary(self, request):
         """
         Totals for the current tab/category selection.

@@ -111,19 +111,19 @@ class PIBillCreateSerializer(serializers.Serializer):
     items   = PIBillItemInputSerializer(many=True)
 
     def validate_proforma_invoice(self, value):
+        from .models import get_pi_billing_status
         try:
             pi = ProformaInvoice.objects.get(id=value)
         except ProformaInvoice.DoesNotExist:
             raise serializers.ValidationError("Proforma Invoice not found")
         if pi.status == 'CANCELLED':
             raise serializers.ValidationError("Cannot generate bill for cancelled PI")
-        existing_bill = PIBill.objects.filter(
-            proforma_invoice=pi
-        ).exclude(status='CANCELLED').first()
-        if existing_bill:
+        # Partial billing: only a PI whose every line is fully billed is blocked.
+        # An incompletely-billed PI can still bill its remaining quantity.
+        _, fully = get_pi_billing_status(pi)
+        if fully:
             raise serializers.ValidationError(
-                f"A bill ({existing_bill.bill_number}) has already been generated for this PI. "
-                f"Duplicate bills are not allowed."
+                "This PI is fully billed. No remaining quantity left to bill."
             )
         return value
 
@@ -133,11 +133,50 @@ class PIBillCreateSerializer(serializers.Serializer):
         return value
 
     def create(self, validated_data):
+        from decimal import Decimal
+        from .models import get_pi_billing_status
+
         items_data = validated_data.pop('items')
-        pi = ProformaInvoice.objects.get(id=validated_data.pop('proforma_invoice'))
+        pi_id = validated_data.pop('proforma_invoice')
         created_by = validated_data.pop('created_by')
 
         with transaction.atomic():
+            # Lock the PI row and re-check remaining quantity INSIDE the
+            # transaction. validate_proforma_invoice() runs before this block, so
+            # two concurrent / double-clicked requests could both pass it. The row
+            # lock serialises them so they can't jointly over-bill or bill a PI
+            # that another request just completed.
+            pi = ProformaInvoice.objects.select_for_update().get(id=pi_id)
+            if pi.status == 'CANCELLED':
+                raise serializers.ValidationError("Cannot generate bill for cancelled PI")
+
+            status_items, fully = get_pi_billing_status(pi)
+            if fully:
+                raise serializers.ValidationError(
+                    "This PI is fully billed. No remaining quantity left to bill."
+                )
+            remaining = {row['pi_item']: row['remaining_qty'] for row in status_items}
+
+            # Sum requested quantity per PI line and reject anything that exceeds
+            # what's left to bill for that line.
+            need = {}
+            for item in items_data:
+                pid = item.get('pi_item')
+                if not pid:
+                    continue
+                need[str(pid)] = need.get(str(pid), Decimal('0')) + Decimal(str(item['quantity']))
+            for pid, qty in need.items():
+                rem = remaining.get(pid)
+                if rem is None:
+                    continue
+                if qty > rem:
+                    raise serializers.ValidationError(
+                        f"Quantity {qty} exceeds the remaining billable quantity ({rem}) "
+                        f"for one of the PI items."
+                    )
+            if need and all(q <= 0 for q in need.values()):
+                raise serializers.ValidationError("Nothing to bill — all quantities are zero.")
+
             bill = PIBill.objects.create(
                 proforma_invoice=pi,
                 bill_date=validated_data['bill_date'],
