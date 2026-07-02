@@ -14,6 +14,7 @@ from .serializers import (
     VendorAssignmentCreateSerializer,
     VendorQuotationSerializer,
     VendorQuotationCreateSerializer,
+    VendorQuotationUpdateSerializer,   # ← NEW
     RequisitionFlowSerializer,
     QuotationItemsForEntrySerializer,
 )
@@ -212,6 +213,8 @@ class VendorQuotationViewSet(viewsets.ModelViewSet):
     def get_serializer_class(self):
         if self.action == 'create':
             return VendorQuotationCreateSerializer
+        if self.action in ('update', 'partial_update'):
+            return VendorQuotationUpdateSerializer
         return VendorQuotationSerializer
 
     def perform_create(self, serializer):

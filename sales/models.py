@@ -33,7 +33,10 @@ class ProformaInvoice(models.Model):
 
     id         = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     pi_number  = models.CharField(max_length=50, unique=True, editable=False)
-    requisition = models.ForeignKey(Requisition, on_delete=models.PROTECT, related_name='proforma_invoices', null=True, blank=True)
+    requisition = models.ForeignKey(Requisition, on_delete=models.PROTECT, related_name='proforma_invoices', null=True, blank=True,
+                                    help_text="Primary requisition (first selected). Full set is in `requisitions`.")
+    requisitions = models.ManyToManyField(Requisition, related_name='proforma_invoices_multi', blank=True,
+                                          help_text="All requisitions this PI draws billable items from (mixed parties allowed).")
     source     = models.CharField(
         max_length=20, choices=SOURCE_CHOICES, default='REQUISITION',
         help_text="How this PI was created — requisition flow, stock sale, or direct"
@@ -133,6 +136,8 @@ class ProformaInvoiceItem(models.Model):
     requisition_item  = models.ForeignKey(RequisitionItem, on_delete=models.PROTECT, null=True, blank=True)
     product           = models.ForeignKey(Product, on_delete=models.PROTECT)
     hsn_code          = models.CharField(max_length=50, blank=True, default='')
+    unit              = models.CharField(max_length=20, blank=True, default='',
+                                         help_text="Unit of measure (editable per PI line; defaults to product unit)")
     quantity          = models.DecimalField(max_digits=10, decimal_places=2)
     unit_price        = models.DecimalField(max_digits=10, decimal_places=2)
     amount            = models.DecimalField(max_digits=12, decimal_places=2, default=0)
@@ -141,6 +146,8 @@ class ProformaInvoiceItem(models.Model):
         db_table = 'proforma_invoice_items'
 
     def save(self, *args, **kwargs):
+        if not self.unit and self.product_id:
+            self.unit = self.product.unit or ''
         self.amount = Decimal(str(self.quantity)) * Decimal(str(self.unit_price))
         super().save(*args, **kwargs)
 

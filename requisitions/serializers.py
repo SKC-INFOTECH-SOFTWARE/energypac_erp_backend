@@ -1,5 +1,6 @@
 from rest_framework import serializers
 from django.db import transaction
+from decimal import Decimal
 from .models import (Requisition, RequisitionItem,
                      VendorRequisitionAssignment, VendorRequisitionItem,
                      VendorQuotation, VendorQuotationItem)
@@ -393,6 +394,79 @@ class VendorQuotationCreateSerializer(serializers.Serializer):
         quotation.total_amount = total_amount
         quotation.save()
         return quotation
+
+    def to_representation(self, instance):
+        return VendorQuotationSerializer(instance).data
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Vendor Quotation Update — edit item rates (and header details); recalcs total
+# ─────────────────────────────────────────────────────────────────────────────
+
+class VendorQuotationItemUpdateSerializer(serializers.Serializer):
+    id          = serializers.UUIDField(required=True)
+    quoted_rate = serializers.DecimalField(
+        max_digits=10, decimal_places=4, required=True,
+        help_text="Updated rate quoted by vendor per unit"
+    )
+    remarks     = serializers.CharField(required=False, allow_blank=True)
+
+    def validate_quoted_rate(self, value):
+        if value is None or value < 0:
+            raise serializers.ValidationError("Quoted rate must be zero or a positive number.")
+        return value
+
+
+class VendorQuotationUpdateSerializer(serializers.ModelSerializer):
+    """
+    Update a vendor quotation: header fields and per-item quoted rates.
+    Item amounts and the quotation total are recalculated on save.
+    """
+    items = VendorQuotationItemUpdateSerializer(many=True, required=False)
+
+    class Meta:
+        model  = VendorQuotation
+        fields = [
+            'reference_number', 'validity_date', 'payment_terms',
+            'delivery_terms', 'remarks', 'currency', 'items',
+        ]
+
+    def validate_items(self, value):
+        quotation = self.instance
+        valid_ids = set(str(i) for i in quotation.items.values_list('id', flat=True))
+        for item in value:
+            if str(item['id']) not in valid_ids:
+                raise serializers.ValidationError(
+                    f"Quotation item {item['id']} does not belong to this quotation."
+                )
+        return value
+
+    def update(self, instance, validated_data):
+        items_data = validated_data.pop('items', None)
+
+        with transaction.atomic():
+            for attr, value in validated_data.items():
+                setattr(instance, attr, value)
+
+            if items_data is not None:
+                item_map = {str(i.id): i for i in instance.items.all()}
+                for item_data in items_data:
+                    item = item_map.get(str(item_data['id']))
+                    if not item:
+                        continue
+                    item.quoted_rate = item_data['quoted_rate']
+                    if 'remarks' in item_data:
+                        item.remarks = item_data['remarks']
+                    item.save()  # recalculates amount = quantity × quoted_rate
+
+            # Recompute quotation total from current item amounts
+            instance.total_amount = sum(
+                (i.amount or Decimal('0') for i in instance.items.all()),
+                Decimal('0')
+            )
+            instance.save()
+
+        return instance
 
     def to_representation(self, instance):
         return VendorQuotationSerializer(instance).data

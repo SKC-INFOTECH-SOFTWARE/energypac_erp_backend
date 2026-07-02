@@ -121,7 +121,16 @@
       "Bash(grep -nE \"\\\\\\\\\\\\$\\\\{BASE_URL\\\\}|BASE_URL\\\\b\" frontend/src/Pages/Login.jsx)",
       "Bash(npx vite *)",
       "Bash(node *)",
-      "Bash(./venv/Scripts/python.exe *)"
+      "Bash(./venv/Scripts/python.exe *)",
+      "Bash(npm install *)",
+      "Bash(head -80 app/globals.css)",
+      "Bash(wc -l app/dashboard/page.tsx app/admin/page.tsx app/plans/page.tsx app/login/page.tsx app/register/page.tsx app/payments/submit/page.tsx app/contact/page.tsx app/about/page.tsx)",
+      "Bash(git checkout *)",
+      "Bash(venv/Scripts/python.exe manage.py check)",
+      "Bash(venv/Scripts/python.exe manage.py makemigrations sales)",
+      "Bash(venv/Scripts/python.exe manage.py migrate sales)",
+      "Bash(venv/Scripts/python.exe manage.py test sales billing --verbosity=1)",
+      "Bash(venv/Scripts/python.exe manage.py shell -c ' *)"
     ]
   }
 }

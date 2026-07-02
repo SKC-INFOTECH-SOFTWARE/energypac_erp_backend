@@ -721,7 +721,7 @@ class ProformaInvoiceViewSet(viewsets.ModelViewSet):
 
         req_items = RequisitionItem.objects.filter(
             requisition_id=req_id
-        ).select_related('product')
+        ).select_related('product', 'requisition')
 
         result = []
         for ri in req_items:
@@ -740,7 +740,7 @@ class ProformaInvoiceViewSet(viewsets.ModelViewSet):
                 can_add_to_pi = False
 
             already_in_pi = ProformaInvoiceItem.objects.filter(
-                proforma_invoice__requisition_id=req_id,
+                requisition_item__requisition_id=req_id,
                 product=ri.product,
             ).exclude(
                 proforma_invoice__status='CANCELLED'
@@ -762,6 +762,8 @@ class ProformaInvoiceViewSet(viewsets.ModelViewSet):
 
             result.append({
                 'requisition_item_id': str(ri.id),
+                'requisition': str(ri.requisition_id),
+                'requisition_number': ri.requisition.requisition_number,
                 'product_id': str(ri.product.id),
                 'product_code': ri.product.item_code,
                 'product_name': ri.product.item_name,
