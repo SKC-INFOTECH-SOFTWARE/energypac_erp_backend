@@ -108,7 +108,224 @@ def _purchase_rate_for_item(pi_item, pi_currency, conversion_rate):
     return selected_rate, offers
 
 
+def _actual_purchase_rate_for_item(pi_item, pi_currency, conversion_rate):
+    """
+    Weighted-average ACTUAL purchase unit rate (in PI currency) for this line,
+    taken from the real Purchase Order items raised against the same
+    requisition + product (non-cancelled). Returns Decimal('0') if never bought.
+    """
+    if not pi_item.requisition_item_id:
+        return Decimal('0')
+
+    from purchase_orders.models import PurchaseOrderItem
+
+    req_id = pi_item.requisition_item.requisition_id
+    qs = (
+        PurchaseOrderItem.objects
+        .filter(po__requisition_id=req_id, product_id=pi_item.product_id)
+        .exclude(po__status='CANCELLED')
+        .select_related('po')
+    )
+
+    tot_qty = Decimal('0')
+    tot_amt = Decimal('0')  # in PI currency
+    for poi in qs:
+        qty = _d(poi.quantity)
+        rate = _d(poi.rate)
+        po_ccy = poi.po.currency or 'INR'
+        # Convert PO rate -> PI currency (same convention as vendor offers).
+        if po_ccy == 'INR' and pi_currency != 'INR' and conversion_rate:
+            cr = _d(conversion_rate)
+            rate = rate / cr if cr else rate
+        elif po_ccy != 'INR' and pi_currency == 'INR' and poi.po.conversion_rate:
+            rate = rate * _d(poi.po.conversion_rate)
+        tot_qty += qty
+        tot_amt += rate * qty
+
+    return (tot_amt / tot_qty) if tot_qty > 0 else Decimal('0')
+
+
 # ── Sheet builders ──────────────────────────────────────────────────────────
+def _group_by_lc(computed):
+    """
+    Reorder note-sheet lines so items sharing the same (non-empty) LC No & Date
+    sit next to each other, grouped by first appearance and otherwise stable.
+    Items without an LC keep their own spot (never clustered together).
+    Lets the user enter matching LC text on any items in any order — the sheet
+    groups + merges them automatically.
+    """
+    order = []
+    decorated = []
+    for idx, entry in enumerate(computed):
+        lc = (entry[0].last_lc_reference or '').strip()
+        key = lc if lc else f'__empty_{idx}'  # empty LC -> unique, so it won't group
+        if key not in order:
+            order.append(key)
+        decorated.append((key, idx, entry))
+    key_index = {k: i for i, k in enumerate(order)}
+    decorated.sort(key=lambda d: (key_index[d[0]], d[1]))
+    return [d[2] for d in decorated]
+
+
+def compute_note_sheet(pi, items):
+    """
+    Shared data model for the Note Sheet / Comparative Statement (Sheet1).
+
+    Both the Excel export and the landscape PDF render from this so their
+    numbers always match. Returns a dict:
+
+        {
+          'currency', 'conversion_rate', 'profit_pct',
+          'vendor_order': [name, ...],   # dynamic vendor columns
+          'generic': bool,               # True when no named vendor quotes
+          'rows': [ {sl, description, unit, qty,
+                     vendor_rates:[Decimal|None], vendor_totals:[Decimal|None],
+                     sale_unit, cpt_total,           # New Sale Price (Kolkata)
+                     lc_ref, last_unit, last_total,  # Last Sale Price (Kolkata)
+                     p_rate, purchase_total, freight, export_cost, profit, cpt2}, ... ],
+          'totals': {vendor:[...], new, last, purchase, freight, export, profit, cpt2},
+        }
+    """
+    conversion_rate = pi.conversion_rate
+    pi_currency = pi.currency or 'INR'
+    profit_pct = _d(pi.profit_loading_percent)
+
+    computed = []
+    for it in items:
+        _sel, offers = _purchase_rate_for_item(it, pi_currency, conversion_rate)
+
+        # Apply per-item vendor-offer overrides (edited on the Comparison Sheet).
+        overrides = it.vendor_offers if isinstance(it.vendor_offers, dict) else {}
+        if overrides:
+            existing = {(o.get('vendor') or '').strip(): o for o in offers}
+            for vname, vrate in overrides.items():
+                key = (vname or '').strip()
+                if not key:
+                    continue
+                orate = _d(vrate)
+                if key in existing:
+                    existing[key]['rate'] = orate
+                    existing[key]['overridden'] = True
+                else:
+                    offers.append({'vendor': key, 'rate': orate, 'selected': False, 'overridden': True})
+
+        # Recompute the purchase (selected/cheapest) rate from the final offers.
+        p_rate = Decimal('0')
+        for o in offers:
+            if o.get('selected'):
+                p_rate = _d(o.get('rate'))
+        if p_rate == 0 and offers:
+            p_rate = min(_d(o.get('rate')) for o in offers)
+
+        computed.append((it, p_rate, offers))
+    computed = _group_by_lc(computed)
+
+    vendor_order = []
+    for (_it, _pr, offers) in computed:
+        for o in offers:
+            name = (o.get('vendor') or '').strip()
+            if name and name not in vendor_order:
+                vendor_order.append(name)
+    generic = not vendor_order
+    if generic:
+        vendor_order = ['Vendor']
+    V = len(vendor_order)
+
+    def vendor_rate(offers, p_rate, name):
+        if generic:
+            return p_rate if p_rate else None
+        for o in offers:
+            if (o.get('vendor') or '').strip() == name:
+                return _d(o.get('rate'))
+        return None
+
+    rows = []
+    vend_totals = [Decimal('0')] * V
+    tot_new = tot_last = tot_actual = Decimal('0')
+    t_purchase = t_freight = t_export = t_profit = t_cpt2 = Decimal('0')
+
+    for idx, (it, p_rate, offers) in enumerate(computed, start=1):
+        qty = _d(it.quantity)
+        sale_unit = _d(it.unit_price)
+        cpt_total = _d(it.amount) or (qty * sale_unit)
+        last_up = _d(it.last_unit_price)
+        last_total = last_up * qty
+        actual_rate = _actual_purchase_rate_for_item(it, pi_currency, conversion_rate)
+        actual_total = actual_rate * qty
+        tot_new += cpt_total
+        tot_last += last_total
+        tot_actual += actual_total
+
+        vendor_rates, vendor_totals = [], []
+        for i, vname in enumerate(vendor_order):
+            vr = vendor_rate(offers, p_rate, vname)
+            if vr is None:
+                vendor_rates.append(None)
+                vendor_totals.append(None)
+            else:
+                vt = vr * qty
+                vend_totals[i] += vt
+                vendor_rates.append(vr)
+                vendor_totals.append(vt)
+
+        purchase_total = qty * p_rate
+        freight = _d(it.freight)
+        export_cost = _d(it.export_cost)
+        profit = (purchase_total * profit_pct / 100) if profit_pct else Decimal('0')
+        cpt2 = purchase_total + freight + export_cost + profit
+        t_purchase += purchase_total
+        t_freight += freight
+        t_export += export_cost
+        t_profit += profit
+        t_cpt2 += cpt2
+
+        name = it.product.item_name if it.product_id else ''
+        prod_desc = (getattr(it.product, 'description', '') or '') if it.product_id else ''
+        full_desc = name + (('\n' + prod_desc) if prod_desc and prod_desc != name else '')
+
+        rows.append({
+            'sl': idx,
+            'description': full_desc,
+            'unit': it.unit or (it.product.unit if it.product_id else ''),
+            'qty': qty,
+            'vendor_rates': vendor_rates,
+            'vendor_totals': vendor_totals,
+            'actual_rate': actual_rate,
+            'actual_total': actual_total,
+            'sale_unit': sale_unit,
+            'cpt_total': cpt_total,
+            'lc_ref': it.last_lc_reference or '',
+            'last_unit': last_up,
+            'last_total': last_total,
+            'p_rate': p_rate,
+            'purchase_total': purchase_total,
+            'freight': freight,
+            'export_cost': export_cost,
+            'profit': profit,
+            'cpt2': cpt2,
+        })
+
+    return {
+        'currency': pi_currency,
+        'conversion_rate': conversion_rate,
+        'profit_pct': profit_pct,
+        'vendor_order': vendor_order,
+        'generic': generic,
+        'rows': rows,
+        'totals': {
+            'vendor': vend_totals,
+            'actual': tot_actual,
+            'new': tot_new,
+            'last': tot_last,
+            'purchase': t_purchase,
+            'freight': t_freight,
+            'export': t_export,
+            'profit': t_profit,
+            'cpt2': t_cpt2,
+        },
+    }
+
+
 def _merge_consecutive(ws, row_values, column):
     """
     Vertically merge runs of consecutive rows that carry the same non-empty
@@ -293,16 +510,57 @@ def _build_pi_sheet(ws, pi, items, symbol):
 
 
 def _build_note_sheet(ws, pi, items, symbol):
-    widths = [6, 26, 8, 8, 13, 13, 13, 13, 16, 12, 13]
-    for i, w in enumerate(widths, start=1):
-        ws.column_dimensions[get_column_letter(i)].width = w
+    data = compute_note_sheet(pi, items)
+    cur = data['currency']
+    vendor_order = data['vendor_order']
+    generic = data['generic']
+    V = len(vendor_order)
+    rows = data['rows']
+    tot = data['totals']
+    profit_pct = data['profit_pct']
 
-    conversion_rate = pi.conversion_rate
-    pi_currency = pi.currency or 'INR'
-    profit_pct = _d(pi.profit_loading_percent)
+    def numval(v):
+        return _num(v) if v is not None else ''
 
+    # ── Column plan (1-based) ───────────────────────────────────────────
+    C_SL, C_DESC, C_UOM, C_QTY = 1, 2, 3, 4
+    C_VEND0 = 5                              # vendor i -> unit=C_VEND0+2i, total=+1
+    C_ACT = C_VEND0 + 2 * V                  # Actual Purchase Price (from PO) — 1 col
+    C_NEW = C_ACT + 1                        # New Sale: unit, total
+    C_LAST = C_NEW + 2                       # Last Sale: LC, last unit, total
+    C_REM = C_LAST + 3                       # Remarks
+    LAST_COL = C_REM
+    last_letter = get_column_letter(LAST_COL)
+
+    # Column widths
+    for col, w in ((C_SL, 6), (C_DESC, 42), (C_UOM, 8), (C_QTY, 8)):
+        ws.column_dimensions[get_column_letter(col)].width = w
+    for i in range(V):
+        ws.column_dimensions[get_column_letter(C_VEND0 + 2 * i)].width = 13
+        ws.column_dimensions[get_column_letter(C_VEND0 + 2 * i + 1)].width = 13
+    ws.column_dimensions[get_column_letter(C_ACT)].width = 14
+    ws.column_dimensions[get_column_letter(C_NEW)].width = 14
+    ws.column_dimensions[get_column_letter(C_NEW + 1)].width = 14
+    ws.column_dimensions[get_column_letter(C_LAST)].width = 20
+    ws.column_dimensions[get_column_letter(C_LAST + 1)].width = 13
+    ws.column_dimensions[get_column_letter(C_LAST + 2)].width = 14
+    ws.column_dimensions[get_column_letter(C_REM)].width = 16
+
+    def put(row, col, val, font=NORMAL, align=None, fill=None, numfmt=None):
+        cell = ws.cell(row=row, column=col, value=val)
+        cell.font = font
+        cell.border = BORDER
+        if align:
+            cell.alignment = align
+        if fill:
+            cell.fill = fill
+        if numfmt:
+            cell.number_format = numfmt
+        return cell
+
+    # ── Title block ─────────────────────────────────────────────────────
     r = 1
-    ws.merge_cells(f'A{r}:K{r}')
+    ws.merge_cells(f'A{r}:{last_letter}{r}')
     c = ws[f'A{r}']
     c.value = 'Comparative Statement / Note Sheet'
     c.font = BOLD_LG
@@ -319,82 +577,99 @@ def _build_note_sheet(ws, pi, items, symbol):
     ws.cell(row=r, column=2, value=pi.project_name or '').font = NORMAL
     r += 1
     ws.cell(row=r, column=1, value='EXCHANGE RATE:').font = BOLD
-    ws.cell(row=r, column=3, value=_num(conversion_rate)).font = NORMAL
-    ws.cell(row=r, column=4, value=f'PER {pi_currency}').font = NORMAL
+    ws.cell(row=r, column=3, value=_num(data['conversion_rate'])).font = NORMAL
+    ws.cell(row=r, column=4, value=f'PER {cur}').font = NORMAL
 
-    # ── Section 1: Comparative statement ────────────────────────────────
+    # ── Section 1: grouped 2-row header ─────────────────────────────────
     r += 2
-    hdr_row = r
-    headers = [
-        'Sl. No.', 'Description', 'U.O.M', 'QTY',
-        f'Unit Price\n(Ex. works)\n{symbol}', f'Total Price\n(Ex. works)\n{symbol}',
-        f'Unit Price\n(CPT)\n{symbol}', f'Total Price\n(CPT)\n{symbol}',
-        'LC No & Date', 'Last Unit Price', f'Last Total\n(CPT)\n{symbol}',
-    ]
-    for i, h in enumerate(headers, start=1):
-        cell = ws.cell(row=r, column=i, value=h)
-        cell.font = BOLD
-        cell.alignment = CENTER
-        cell.fill = HEAD_FILL
-        cell.border = BORDER
-    ws.row_dimensions[r].height = 42
+    hr1 = r
+    hr2 = r + 1
 
-    tot_exworks = Decimal('0')
-    tot_cpt = Decimal('0')
-    # Pre-compute purchase rates once (reused by section 2).
-    computed = []
-    for it in items:
-        p_rate, offers = _purchase_rate_for_item(it, pi_currency, conversion_rate)
-        computed.append((it, p_rate, offers))
+    # Group-header row
+    ws.merge_cells(start_row=hr1, start_column=C_SL, end_row=hr1, end_column=C_QTY)
+    put(hr1, C_SL, 'ITEM DETAILS', font=BOLD, align=CENTER, fill=HEAD_FILL)
+    for i, vname in enumerate(vendor_order):
+        s = C_VEND0 + 2 * i
+        ws.merge_cells(start_row=hr1, start_column=s, end_row=hr1, end_column=s + 1)
+        title = 'Offer (Ex. works)\nLast Supply' if generic else f'{vname}\nOffer / Last Supply'
+        put(hr1, s, title, font=BOLD, align=CENTER, fill=HEAD_FILL)
+    ws.merge_cells(start_row=hr1, start_column=C_ACT, end_row=hr2, end_column=C_ACT)
+    put(hr1, C_ACT, f'Actual Purchase\nPrice (PO)\n{cur}', font=BOLD, align=CENTER, fill=HEAD_FILL)
+    ws.merge_cells(start_row=hr1, start_column=C_NEW, end_row=hr1, end_column=C_NEW + 1)
+    put(hr1, C_NEW, 'New Sale Price from Kolkata office', font=BOLD, align=CENTER, fill=HEAD_FILL)
+    ws.merge_cells(start_row=hr1, start_column=C_LAST, end_row=hr1, end_column=C_LAST + 2)
+    put(hr1, C_LAST, 'Last Sale Price from Kolkata office', font=BOLD, align=CENTER, fill=HEAD_FILL)
+    ws.merge_cells(start_row=hr1, start_column=C_REM, end_row=hr2, end_column=C_REM)
+    put(hr1, C_REM, 'REMARKS', font=BOLD, align=CENTER, fill=HEAD_FILL)
 
-    lc_rows = []  # (excel_row, lc_reference) -> used to merge shared LC cells
-    for idx, (it, p_rate, offers) in enumerate(computed, start=1):
+    # Sub-header row
+    put(hr2, C_SL, 'Sl. No.', font=BOLD, align=CENTER, fill=HEAD_FILL)
+    put(hr2, C_DESC, 'Description', font=BOLD, align=CENTER, fill=HEAD_FILL)
+    put(hr2, C_UOM, 'U.O.M', font=BOLD, align=CENTER, fill=HEAD_FILL)
+    put(hr2, C_QTY, 'QTY', font=BOLD, align=CENTER, fill=HEAD_FILL)
+    for i in range(V):
+        s = C_VEND0 + 2 * i
+        put(hr2, s, f'Unit Price\n(Ex. works)\n{cur}', font=BOLD, align=CENTER, fill=HEAD_FILL)
+        put(hr2, s + 1, f'Total Price\n(Ex. works)\n{cur}', font=BOLD, align=CENTER, fill=HEAD_FILL)
+    put(hr2, C_NEW, f'Unit Price\n(CPT, BENAPOLE)\n{cur}', font=BOLD, align=CENTER, fill=HEAD_FILL)
+    put(hr2, C_NEW + 1, f'Total Price\n(CPT, BENAPOLE)\n{cur}', font=BOLD, align=CENTER, fill=HEAD_FILL)
+    put(hr2, C_LAST, 'LC NO & DATE', font=BOLD, align=CENTER, fill=HEAD_FILL)
+    put(hr2, C_LAST + 1, 'LAST UNIT PRICE', font=BOLD, align=CENTER, fill=HEAD_FILL)
+    put(hr2, C_LAST + 2, f'Total Price\n(CPT, BENAPOLE)\n{cur}', font=BOLD, align=CENTER, fill=HEAD_FILL)
+
+    # Border every header cell (incl. merged spans) for a clean grid.
+    for rr in (hr1, hr2):
+        for cc in range(1, LAST_COL + 1):
+            ws.cell(row=rr, column=cc).border = BORDER
+    ws.row_dimensions[hr1].height = 30
+    ws.row_dimensions[hr2].height = 44
+
+    # ── Section 1: data rows ────────────────────────────────────────────
+    r = hr2
+    lc_rows = []  # (excel_row, lc_reference) -> merge shared LC cells
+    for row in rows:
         r += 1
-        lc_rows.append((r, (it.last_lc_reference or '').strip()))
-        qty = _d(it.quantity)
-        sale_unit = _d(it.unit_price)
-        ex_total = qty * p_rate
-        cpt_total = _d(it.amount) or (qty * sale_unit)
-        last_up = _d(it.last_unit_price)
-        tot_exworks += ex_total
-        tot_cpt += cpt_total
-        vals = [
-            idx,
-            it.product.item_name if it.product_id else '',
-            it.unit or (it.product.unit if it.product_id else ''),
-            _num(qty), _num(p_rate), _num(ex_total),
-            _num(sale_unit), _num(cpt_total),
-            it.last_lc_reference or '', _num(last_up), _num(last_up * qty),
-        ]
-        for i, v in enumerate(vals, start=1):
-            cell = ws.cell(row=r, column=i, value=v)
-            cell.border = BORDER
-            cell.font = NORMAL
-            if i == 2 or i == 9:
-                cell.alignment = LEFT
-            elif i in (4, 5, 6, 7, 8, 10, 11):
-                cell.alignment = RIGHT
-                cell.number_format = '#,##0.00'
-            else:
-                cell.alignment = CENTER
-        ws.row_dimensions[r].height = 34
+        lc_rows.append((r, (row['lc_ref'] or '').strip()))
+        put(r, C_SL, row['sl'], align=CENTER)
+        put(r, C_DESC, row['description'], align=LEFT)
+        put(r, C_UOM, row['unit'], align=CENTER)
+        put(r, C_QTY, _num(row['qty']), align=RIGHT, numfmt='#,##0.00')
+        for i in range(V):
+            s = C_VEND0 + 2 * i
+            put(r, s, numval(row['vendor_rates'][i]), align=RIGHT, numfmt='#,##0.00')
+            put(r, s + 1, numval(row['vendor_totals'][i]), align=RIGHT, numfmt='#,##0.00')
+        put(r, C_ACT, (_num(row['actual_rate']) if row['actual_rate'] else ''), align=RIGHT, numfmt='#,##0.00')
+        put(r, C_NEW, _num(row['sale_unit']), align=RIGHT, numfmt='#,##0.00')
+        put(r, C_NEW + 1, _num(row['cpt_total']), align=RIGHT, numfmt='#,##0.00')
+        put(r, C_LAST, row['lc_ref'] or '', align=LEFT)
+        put(r, C_LAST + 1, _num(row['last_unit']), align=RIGHT, numfmt='#,##0.00')
+        put(r, C_LAST + 2, _num(row['last_total']), align=RIGHT, numfmt='#,##0.00')
+        put(r, C_REM, '', align=LEFT)
+        ws.row_dimensions[r].height = 40
 
-    # Merge consecutive rows that share the same (non-empty) LC No & Date into
-    # one "common" cell, matching the client's hand-made comparative statement.
-    _merge_consecutive(ws, lc_rows, column=9)
+    # Merge consecutive rows sharing the same (non-empty) LC No & Date.
+    _merge_consecutive(ws, lc_rows, column=C_LAST)
 
+    # Totals row
     r += 1
-    ws.merge_cells(f'A{r}:D{r}')
-    ws.cell(row=r, column=1, value='Total Amount').font = BOLD
-    ws[f'A{r}'].alignment = RIGHT
-    ws.cell(row=r, column=6, value=_num(tot_exworks)).number_format = '#,##0.00'
-    ws.cell(row=r, column=8, value=_num(tot_cpt)).number_format = '#,##0.00'
-    _style_range(ws, f'A{r}:K{r}')
-    for col in (6, 8):
-        ws.cell(row=r, column=col).font = BOLD
-        ws.cell(row=r, column=col).alignment = RIGHT
+    ws.merge_cells(start_row=r, start_column=C_SL, end_row=r, end_column=C_QTY)
+    put(r, C_SL, 'Total Amount', font=BOLD, align=RIGHT, fill=HEAD_FILL)
+    for cc in range(C_SL, C_QTY + 1):
+        ws.cell(row=r, column=cc).fill = HEAD_FILL
+        ws.cell(row=r, column=cc).border = BORDER
+    for i in range(V):
+        s = C_VEND0 + 2 * i
+        put(r, s, '', fill=HEAD_FILL)
+        put(r, s + 1, _num(tot['vendor'][i]), font=BOLD, align=RIGHT, fill=HEAD_FILL, numfmt='#,##0.00')
+    put(r, C_ACT, _num(tot['actual']), font=BOLD, align=RIGHT, fill=HEAD_FILL, numfmt='#,##0.00')
+    put(r, C_NEW, '', fill=HEAD_FILL)
+    put(r, C_NEW + 1, _num(tot['new']), font=BOLD, align=RIGHT, fill=HEAD_FILL, numfmt='#,##0.00')
+    put(r, C_LAST, '', fill=HEAD_FILL)
+    put(r, C_LAST + 1, '', fill=HEAD_FILL)
+    put(r, C_LAST + 2, _num(tot['last']), font=BOLD, align=RIGHT, fill=HEAD_FILL, numfmt='#,##0.00')
+    put(r, C_REM, '', fill=HEAD_FILL)
 
-    # ── Section 2: Price break-up ───────────────────────────────────────
+    # ── Section 2: Price break-up (same rows, override-aware) ───────────
     r += 3
     ws.merge_cells(f'A{r}:D{r}')
     c = ws[f'A{r}']
@@ -406,9 +681,9 @@ def _build_note_sheet(ws, pi, items, symbol):
     r += 1
     headers2 = [
         'Sl. No.', 'Description', 'U.O.M', 'QTY',
-        f'Purchase Unit Price\n(Ex. works)\n{symbol}', f'Total Purchase\n(Ex. works)\n{symbol}',
+        f'Purchase Unit Price\n(Ex. works)\n{cur}', f'Total Purchase\n(Ex. works)\n{cur}',
         'Freight', 'Export Cost', f'Profit Loading\n@ {_num(profit_pct):g}%',
-        f'Total Amount\n(CPT)\n{symbol}',
+        f'Total Amount\n(CPT)\n{cur}',
     ]
     for i, h in enumerate(headers2, start=1):
         cell = ws.cell(row=r, column=i, value=h)
@@ -418,26 +693,12 @@ def _build_note_sheet(ws, pi, items, symbol):
         cell.border = BORDER
     ws.row_dimensions[r].height = 42
 
-    t_purchase = t_freight = t_export = t_profit = t_cpt2 = Decimal('0')
-    for idx, (it, p_rate, offers) in enumerate(computed, start=1):
+    for row in rows:
         r += 1
-        qty = _d(it.quantity)
-        purchase_total = qty * p_rate
-        freight = _d(it.freight)
-        export_cost = _d(it.export_cost)
-        profit = (purchase_total * profit_pct / 100) if profit_pct else Decimal('0')
-        cpt = purchase_total + freight + export_cost + profit
-        t_purchase += purchase_total
-        t_freight += freight
-        t_export += export_cost
-        t_profit += profit
-        t_cpt2 += cpt
         vals = [
-            idx,
-            it.product.item_name if it.product_id else '',
-            it.unit or (it.product.unit if it.product_id else ''),
-            _num(qty), _num(p_rate), _num(purchase_total),
-            _num(freight), _num(export_cost), _num(profit), _num(cpt),
+            row['sl'], row['description'], row['unit'],
+            _num(row['qty']), _num(row['p_rate']), _num(row['purchase_total']),
+            _num(row['freight']), _num(row['export_cost']), _num(row['profit']), _num(row['cpt2']),
         ]
         for i, v in enumerate(vals, start=1):
             cell = ws.cell(row=r, column=i, value=v)
@@ -456,7 +717,7 @@ def _build_note_sheet(ws, pi, items, symbol):
     ws.merge_cells(f'A{r}:D{r}')
     ws.cell(row=r, column=1, value='Total Amount').font = BOLD
     ws[f'A{r}'].alignment = RIGHT
-    for col, val in ((6, t_purchase), (7, t_freight), (8, t_export), (9, t_profit), (10, t_cpt2)):
+    for col, val in ((6, tot['purchase']), (7, tot['freight']), (8, tot['export']), (9, tot['profit']), (10, tot['cpt2'])):
         cell = ws.cell(row=r, column=col, value=_num(val))
         cell.number_format = '#,##0.00'
         cell.font = BOLD

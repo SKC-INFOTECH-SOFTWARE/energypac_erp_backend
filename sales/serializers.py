@@ -467,6 +467,8 @@ class PIItemSerializer(serializers.ModelSerializer):
     purchase_status = serializers.SerializerMethodField()
     source_requisition        = serializers.SerializerMethodField()
     source_requisition_number = serializers.SerializerMethodField()
+    vendor_offers_available   = serializers.SerializerMethodField()
+    actual_purchase_rate      = serializers.SerializerMethodField()
 
     class Meta:
         model  = ProformaInvoiceItem
@@ -475,12 +477,35 @@ class PIItemSerializer(serializers.ModelSerializer):
             'requisition_item', 'source_requisition', 'source_requisition_number',
             'hsn_code', 'quantity', 'unit_price', 'amount',
             'freight', 'export_cost', 'last_lc_reference', 'last_unit_price',
+            'vendor_offers', 'vendor_offers_available', 'actual_purchase_rate',
             'purchase_status',
         ]
         read_only_fields = ['id', 'amount']
 
     def get_unit(self, obj):
         return obj.unit or (obj.product.unit if obj.product_id else '')
+
+    def _pi_currency_rate(self, obj):
+        pi = obj.proforma_invoice
+        return (pi.currency or 'INR'), pi.conversion_rate
+
+    def get_vendor_offers_available(self, obj):
+        """Quotation offers for this line, {vendor_name: rate} in PI currency."""
+        from .excel_export import _purchase_rate_for_item
+        cur, cr = self._pi_currency_rate(obj)
+        offers = _purchase_rate_for_item(obj, cur, cr)[1]
+        out = {}
+        for o in offers:
+            name = (o.get('vendor') or '').strip()
+            if name:
+                out[name] = float(o.get('rate') or 0)
+        return out
+
+    def get_actual_purchase_rate(self, obj):
+        """Weighted-avg actual purchase unit rate (PI currency) from POs."""
+        from .excel_export import _actual_purchase_rate_for_item
+        cur, cr = self._pi_currency_rate(obj)
+        return float(_actual_purchase_rate_for_item(obj, cur, cr))
 
     def _item_requisition(self, obj):
         """The requisition this line was drawn from (per-item), else PI primary."""
@@ -534,7 +559,7 @@ class ProformaInvoiceSerializer(serializers.ModelSerializer):
             'place_of_receipt', 'port_of_loading', 'port_of_discharge',
             'terms_of_delivery', 'terms_of_payment',
             'project_name', 'negotiated_by', 'checked_by', 'profit_loading_percent',
-            'grand_total',
+            'freight_charges', 'grand_total',
             'amount_received', 'balance',
             'terms_and_conditions', 'notes',
             'revision_number', 'is_revised',
@@ -585,6 +610,7 @@ class PIItemCreateSerializer(serializers.Serializer):
     export_cost       = serializers.DecimalField(max_digits=12, decimal_places=2, required=False, default=0)
     last_lc_reference = serializers.CharField(required=False, allow_blank=True, default='')
     last_unit_price   = serializers.DecimalField(max_digits=12, decimal_places=4, required=False, default=0)
+    vendor_offers     = serializers.JSONField(required=False, default=dict)
 
 
 class ProformaInvoiceCreateSerializer(serializers.Serializer):
@@ -608,6 +634,7 @@ class ProformaInvoiceCreateSerializer(serializers.Serializer):
     currency    = serializers.CharField(default='INR')
     conversion_rate = serializers.DecimalField(max_digits=10, decimal_places=4, required=False, allow_null=True)
     payment_due_date = serializers.DateField(required=False, allow_null=True)
+    freight_charges = serializers.DecimalField(max_digits=12, decimal_places=2, required=False, default=0)
     items       = PIItemCreateSerializer(many=True)
 
     lc_number            = serializers.CharField(required=False, allow_blank=True, default='')
@@ -813,6 +840,7 @@ class ProformaInvoiceCreateSerializer(serializers.Serializer):
                     export_cost=item_data.get('export_cost', 0) or 0,
                     last_lc_reference=item_data.get('last_lc_reference', '') or '',
                     last_unit_price=item_data.get('last_unit_price', 0) or 0,
+                    vendor_offers=item_data.get('vendor_offers', {}) or {},
                 )
 
             pi.calculate_total()
@@ -849,6 +877,7 @@ class PIItemUpdateSerializer(serializers.Serializer):
     export_cost       = serializers.DecimalField(max_digits=12, decimal_places=2, required=False, default=0)
     last_lc_reference = serializers.CharField(required=False, allow_blank=True, default='')
     last_unit_price   = serializers.DecimalField(max_digits=12, decimal_places=4, required=False, default=0)
+    vendor_offers     = serializers.JSONField(required=False, default=dict)
 
 
 class ProformaInvoiceUpdateSerializer(serializers.ModelSerializer):
@@ -868,6 +897,7 @@ class ProformaInvoiceUpdateSerializer(serializers.ModelSerializer):
             'place_of_receipt', 'port_of_loading', 'port_of_discharge',
             'terms_of_delivery', 'terms_of_payment',
             'project_name', 'negotiated_by', 'checked_by', 'profit_loading_percent',
+            'freight_charges',
             'terms_and_conditions', 'notes', 'status',
             'requisitions', 'items',
         ]
@@ -960,6 +990,8 @@ class ProformaInvoiceUpdateSerializer(serializers.ModelSerializer):
                         item.export_cost       = item_data.get('export_cost', 0) or 0
                         item.last_lc_reference = item_data.get('last_lc_reference', '') or ''
                         item.last_unit_price   = item_data.get('last_unit_price', 0) or 0
+                        if 'vendor_offers' in item_data:
+                            item.vendor_offers = item_data.get('vendor_offers') or {}
                         item.save()
                         submitted_ids.add(str(item_id))
                     else:
@@ -982,6 +1014,7 @@ class ProformaInvoiceUpdateSerializer(serializers.ModelSerializer):
                             export_cost=item_data.get('export_cost', 0) or 0,
                             last_lc_reference=item_data.get('last_lc_reference', '') or '',
                             last_unit_price=item_data.get('last_unit_price', 0) or 0,
+                            vendor_offers=item_data.get('vendor_offers', {}) or {},
                         )
                         submitted_ids.add(str(new_item.id))
 

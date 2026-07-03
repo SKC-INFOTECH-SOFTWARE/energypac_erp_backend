@@ -135,7 +135,11 @@
       "Bash(venv/Scripts/python.exe -c \"import openpyxl; print\\('openpyxl', openpyxl.__version__\\)\")",
       "Bash(venv/Scripts/python.exe -c \"import pandas; print\\('pandas', pandas.__version__\\)\")",
       "Bash(venv/Scripts/python.exe -m pip install xlrd -q)",
-      "Bash(venv/Scripts/python.exe *)"
+      "Bash(venv/Scripts/python.exe *)",
+      "Bash(npx eslint *)",
+      "Bash(echo \"=== exit $? ===\")",
+      "Bash(echo \"EXIT: $?\")",
+      "Bash(echo \"LINT EXIT: $?\")"
     ]
   }
 }

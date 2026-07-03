@@ -84,6 +84,12 @@ class ProformaInvoice(models.Model):
         help_text="Payment due date from client"
     )
 
+    # ── Freight (header-level, in PI currency) ────────────────────────────
+    freight_charges = models.DecimalField(
+        max_digits=12, decimal_places=2, default=0,
+        help_text="Total freight charges (in PI currency). If > 0, shown on the PI PDF grand-total line."
+    )
+
     # ── Totals ────────────────────────────────────────────────────────────
     grand_total = models.DecimalField(max_digits=12, decimal_places=2, default=0, help_text="Sum of all items")
     amount_received = models.DecimalField(max_digits=12, decimal_places=2, default=0)
@@ -162,6 +168,10 @@ class ProformaInvoiceItem(models.Model):
                                          help_text="Last supply LC No & Date (Note Sheet comparison)")
     last_unit_price   = models.DecimalField(max_digits=12, decimal_places=4, default=0,
                                             help_text="Last supply unit price (Note Sheet comparison)")
+    vendor_offers     = models.JSONField(default=dict, blank=True,
+                                         help_text="Per-vendor offer-rate overrides for the Note Sheet, "
+                                                   "keyed by vendor name: {\"<vendor>\": <rate>}. Overrides "
+                                                   "the rate pulled from vendor quotations for that vendor.")
 
     class Meta:
         db_table = 'proforma_invoice_items'

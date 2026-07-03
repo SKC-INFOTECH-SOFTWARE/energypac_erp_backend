@@ -475,6 +475,18 @@ class ProformaInvoiceViewSet(viewsets.ModelViewSet):
         resp['Content-Disposition'] = f'attachment; filename="{safe_no}.xlsx"'
         return resp
 
+    @action(detail=True, methods=['get'], url_path='note-sheet-pdf')
+    def note_sheet_pdf(self, request, pk=None):
+        """Download the Note Sheet / Comparative Statement (Sheet1) as a landscape PDF."""
+        from django.http import HttpResponse
+        from .note_sheet_pdf import build_note_sheet_pdf
+        pi = self.get_object()
+        buf = build_note_sheet_pdf(pi)
+        safe_no = (pi.pi_number or 'PI').replace('/', '-')
+        resp = HttpResponse(buf.getvalue(), content_type='application/pdf')
+        resp['Content-Disposition'] = f'attachment; filename="{safe_no}-note-sheet.pdf"'
+        return resp
+
     # ── Procurement visibility (which PI items still need buying) ─────────
 
     @action(detail=True, methods=['get'])
@@ -777,6 +789,13 @@ class ProformaInvoiceViewSet(viewsets.ModelViewSet):
                 can_add_to_pi = False
                 purchase_status = 'FULLY_ALLOCATED'
 
+            # Actual purchase price = weighted-avg rate from the PO(s) raised for
+            # this requisition + product (in the PO's currency, typically INR).
+            pagg = PurchaseOrderItem.objects.filter(
+                po__requisition_id=req_id, product=ri.product,
+            ).exclude(po__status='CANCELLED').aggregate(amt=Sum('amount'), qty=Sum('quantity'))
+            actual_purchase_rate = float(pagg['amt'] / pagg['qty']) if pagg['qty'] else 0.0
+
             result.append({
                 'requisition_item_id': str(ri.id),
                 'requisition': str(ri.requisition_id),
@@ -792,6 +811,7 @@ class ProformaInvoiceViewSet(viewsets.ModelViewSet):
                 'current_stock': float(ri.product.current_stock),
                 'purchase_status': purchase_status,
                 'can_add_to_pi': can_add_to_pi,
+                'actual_purchase_rate': actual_purchase_rate,
             })
 
         return Response({'items': result})
