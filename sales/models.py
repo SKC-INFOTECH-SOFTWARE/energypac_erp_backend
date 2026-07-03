@@ -68,6 +68,17 @@ class ProformaInvoice(models.Model):
         max_digits=10, decimal_places=4, null=True, blank=True,
         help_text="INR conversion rate at PI creation (immutable record)"
     )
+
+    # ── Note Sheet / Comparative Statement (internal costing) ─────────────
+    project_name          = models.CharField(max_length=200, blank=True, default='',
+                                              help_text="Project name shown on the internal Note Sheet")
+    negotiated_by         = models.CharField(max_length=150, blank=True, default='',
+                                              help_text="Name/designation for the 'Negotiated By' signature block")
+    checked_by            = models.CharField(max_length=150, blank=True, default='',
+                                             help_text="Name/designation for the 'Checked By' signature block")
+    profit_loading_percent = models.DecimalField(max_digits=6, decimal_places=2, default=5,
+                                                 help_text="Profit loading % applied on ex-works purchase price in the Note Sheet")
+
     payment_due_date = models.DateField(
         null=True, blank=True,
         help_text="Payment due date from client"
@@ -141,6 +152,16 @@ class ProformaInvoiceItem(models.Model):
     quantity          = models.DecimalField(max_digits=10, decimal_places=2)
     unit_price        = models.DecimalField(max_digits=10, decimal_places=2)
     amount            = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+
+    # ── Note Sheet / Comparative Statement (internal costing, per line) ───
+    freight           = models.DecimalField(max_digits=12, decimal_places=2, default=0,
+                                             help_text="Freight cost for this line (Note Sheet)")
+    export_cost       = models.DecimalField(max_digits=12, decimal_places=2, default=0,
+                                            help_text="Export cost for this line (Note Sheet)")
+    last_lc_reference = models.CharField(max_length=200, blank=True, default='',
+                                         help_text="Last supply LC No & Date (Note Sheet comparison)")
+    last_unit_price   = models.DecimalField(max_digits=12, decimal_places=4, default=0,
+                                            help_text="Last supply unit price (Note Sheet comparison)")
 
     class Meta:
         db_table = 'proforma_invoice_items'

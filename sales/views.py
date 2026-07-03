@@ -458,6 +458,23 @@ class ProformaInvoiceViewSet(viewsets.ModelViewSet):
             action_url='/proforma-invoices',
         )
 
+    # ── Excel export (client PI sheet + internal Note Sheet) ─────────────
+
+    @action(detail=True, methods=['get'])
+    def excel(self, request, pk=None):
+        """Download this PI as a 2-sheet .xlsx (PI + Comparative/Note Sheet)."""
+        from django.http import HttpResponse
+        from .excel_export import build_pi_workbook
+        pi = self.get_object()
+        buf = build_pi_workbook(pi)
+        safe_no = (pi.pi_number or 'PI').replace('/', '-')
+        resp = HttpResponse(
+            buf.getvalue(),
+            content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        )
+        resp['Content-Disposition'] = f'attachment; filename="{safe_no}.xlsx"'
+        return resp
+
     # ── Procurement visibility (which PI items still need buying) ─────────
 
     @action(detail=True, methods=['get'])

@@ -474,6 +474,7 @@ class PIItemSerializer(serializers.ModelSerializer):
             'id', 'product', 'product_name', 'product_code', 'unit',
             'requisition_item', 'source_requisition', 'source_requisition_number',
             'hsn_code', 'quantity', 'unit_price', 'amount',
+            'freight', 'export_cost', 'last_lc_reference', 'last_unit_price',
             'purchase_status',
         ]
         read_only_fields = ['id', 'amount']
@@ -532,6 +533,7 @@ class ProformaInvoiceSerializer(serializers.ModelSerializer):
             'pre_carriage_by', 'country_of_origin', 'final_destination',
             'place_of_receipt', 'port_of_loading', 'port_of_discharge',
             'terms_of_delivery', 'terms_of_payment',
+            'project_name', 'negotiated_by', 'checked_by', 'profit_loading_percent',
             'grand_total',
             'amount_received', 'balance',
             'terms_and_conditions', 'notes',
@@ -579,6 +581,10 @@ class PIItemCreateSerializer(serializers.Serializer):
     unit       = serializers.CharField(required=False, allow_blank=True, default='')
     quantity   = serializers.DecimalField(max_digits=10, decimal_places=2)
     unit_price = serializers.DecimalField(max_digits=10, decimal_places=2)
+    freight           = serializers.DecimalField(max_digits=12, decimal_places=2, required=False, default=0)
+    export_cost       = serializers.DecimalField(max_digits=12, decimal_places=2, required=False, default=0)
+    last_lc_reference = serializers.CharField(required=False, allow_blank=True, default='')
+    last_unit_price   = serializers.DecimalField(max_digits=12, decimal_places=4, required=False, default=0)
 
 
 class ProformaInvoiceCreateSerializer(serializers.Serializer):
@@ -620,6 +626,10 @@ class ProformaInvoiceCreateSerializer(serializers.Serializer):
     terms_of_payment     = serializers.CharField(required=False, allow_blank=True, default='')
     terms_and_conditions = serializers.ListField(child=serializers.JSONField(), required=False, default=list)
     notes                = serializers.CharField(required=False, allow_blank=True, default='')
+    project_name         = serializers.CharField(required=False, allow_blank=True, default='')
+    negotiated_by        = serializers.CharField(required=False, allow_blank=True, default='')
+    checked_by           = serializers.CharField(required=False, allow_blank=True, default='')
+    profit_loading_percent = serializers.DecimalField(max_digits=6, decimal_places=2, required=False, default=5)
 
     def validate_pi_number(self, value):
         value = (value or '').strip()
@@ -799,6 +809,10 @@ class ProformaInvoiceCreateSerializer(serializers.Serializer):
                     unit=item_data.get('unit', '') or (product.unit or ''),
                     quantity=item_data['quantity'],
                     unit_price=item_data['unit_price'],
+                    freight=item_data.get('freight', 0) or 0,
+                    export_cost=item_data.get('export_cost', 0) or 0,
+                    last_lc_reference=item_data.get('last_lc_reference', '') or '',
+                    last_unit_price=item_data.get('last_unit_price', 0) or 0,
                 )
 
             pi.calculate_total()
@@ -831,6 +845,10 @@ class PIItemUpdateSerializer(serializers.Serializer):
     unit       = serializers.CharField(required=False, allow_blank=True, default='')
     quantity   = serializers.DecimalField(max_digits=10, decimal_places=2)
     unit_price = serializers.DecimalField(max_digits=10, decimal_places=2)
+    freight           = serializers.DecimalField(max_digits=12, decimal_places=2, required=False, default=0)
+    export_cost       = serializers.DecimalField(max_digits=12, decimal_places=2, required=False, default=0)
+    last_lc_reference = serializers.CharField(required=False, allow_blank=True, default='')
+    last_unit_price   = serializers.DecimalField(max_digits=12, decimal_places=4, required=False, default=0)
 
 
 class ProformaInvoiceUpdateSerializer(serializers.ModelSerializer):
@@ -849,6 +867,7 @@ class ProformaInvoiceUpdateSerializer(serializers.ModelSerializer):
             'pre_carriage_by', 'country_of_origin', 'final_destination',
             'place_of_receipt', 'port_of_loading', 'port_of_discharge',
             'terms_of_delivery', 'terms_of_payment',
+            'project_name', 'negotiated_by', 'checked_by', 'profit_loading_percent',
             'terms_and_conditions', 'notes', 'status',
             'requisitions', 'items',
         ]
@@ -937,6 +956,10 @@ class ProformaInvoiceUpdateSerializer(serializers.ModelSerializer):
                         item.unit       = item_data.get('unit', '') or (product.unit or '')
                         item.quantity   = item_data['quantity']
                         item.unit_price = item_data['unit_price']
+                        item.freight           = item_data.get('freight', 0) or 0
+                        item.export_cost       = item_data.get('export_cost', 0) or 0
+                        item.last_lc_reference = item_data.get('last_lc_reference', '') or ''
+                        item.last_unit_price   = item_data.get('last_unit_price', 0) or 0
                         item.save()
                         submitted_ids.add(str(item_id))
                     else:
@@ -955,6 +978,10 @@ class ProformaInvoiceUpdateSerializer(serializers.ModelSerializer):
                             unit=item_data.get('unit', '') or (product.unit or ''),
                             quantity=item_data['quantity'],
                             unit_price=item_data['unit_price'],
+                            freight=item_data.get('freight', 0) or 0,
+                            export_cost=item_data.get('export_cost', 0) or 0,
+                            last_lc_reference=item_data.get('last_lc_reference', '') or '',
+                            last_unit_price=item_data.get('last_unit_price', 0) or 0,
                         )
                         submitted_ids.add(str(new_item.id))
 

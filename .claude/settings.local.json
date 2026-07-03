@@ -130,7 +130,12 @@
       "Bash(venv/Scripts/python.exe manage.py makemigrations sales)",
       "Bash(venv/Scripts/python.exe manage.py migrate sales)",
       "Bash(venv/Scripts/python.exe manage.py test sales billing --verbosity=1)",
-      "Bash(venv/Scripts/python.exe manage.py shell -c ' *)"
+      "Bash(venv/Scripts/python.exe manage.py shell -c ' *)",
+      "Bash(venv/Scripts/python.exe -c \"import xlrd; print\\('xlrd', xlrd.__version__\\)\")",
+      "Bash(venv/Scripts/python.exe -c \"import openpyxl; print\\('openpyxl', openpyxl.__version__\\)\")",
+      "Bash(venv/Scripts/python.exe -c \"import pandas; print\\('pandas', pandas.__version__\\)\")",
+      "Bash(venv/Scripts/python.exe -m pip install xlrd -q)",
+      "Bash(venv/Scripts/python.exe *)"
     ]
   }
 }
