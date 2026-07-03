@@ -386,6 +386,17 @@ def _build_pi_sheet(ws, pi, items, symbol):
         cell.alignment = LEFT
         _style_range(ws, f'{col_l}{row}:{col_r}{row}')
 
+    # L/C No & Date at the very top (centred), only when the user filled it.
+    if pi.lc_number:
+        r += 1
+        ws.merge_cells(f'A{r}:{last_col}{r}')
+        lc_cell = ws[f'A{r}']
+        lc_cell.value = f'L/C No & Date: {pi.lc_number}'
+        lc_cell.font = BOLD
+        lc_cell.alignment = CENTER
+        _style_range(ws, f'A{r}:{last_col}{r}')
+        ws.row_dimensions[r].height = 18
+
     r += 1
     label_value(r, 'A', 'C', 'Exporter / Manufacturer:',
                 pi.exporter_beneficiary or 'ENERGYPAC ENGINEERING LIMITED.')
