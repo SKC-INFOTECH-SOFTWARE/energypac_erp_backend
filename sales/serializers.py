@@ -780,15 +780,32 @@ class ProformaInvoiceCreateSerializer(serializers.Serializer):
                 source = 'STOCK_SALE'
             data['source'] = source
 
-            # Stock Sale must respect on-hand quantity. Direct PI (phone rate /
-            # ad-hoc) is not bound to stock, so it skips this guard.
+            # Stock Sale must respect AVAILABLE quantity — on-hand stock minus what
+            # other open (DRAFT/SENT) PIs have already promised. Using raw
+            # current_stock would let the same unit be sold on two draft PIs, since
+            # stock is only deducted when a PI is ACCEPTED.
+            # Direct PI (phone rate / ad-hoc) is not bound to stock, so it skips this.
             if source == 'STOCK_SALE':
-                insufficient_stock = []
+                from inventory.stock_service import reserved_qty_map, ZERO
+
+                # Same product can appear on more than one line — check the total.
+                requested_by_product = {}
                 for item in items:
-                    product = Product.objects.get(id=item['product'])
-                    if product.current_stock < Decimal(str(item['quantity'])):
+                    pid = item['product'].id if hasattr(item['product'], 'id') else item['product']
+                    requested_by_product[pid] = requested_by_product.get(pid, Decimal('0')) + Decimal(str(item['quantity']))
+
+                reserved = reserved_qty_map(list(requested_by_product.keys()))
+
+                insufficient_stock = []
+                for pid, requested in requested_by_product.items():
+                    product = Product.objects.get(id=pid)
+                    available = Decimal(str(product.current_stock)) - reserved.get(product.id, ZERO)
+                    if available < requested:
                         insufficient_stock.append(
-                            f"{product.item_name} (stock: {product.current_stock}, requested: {item['quantity']})"
+                            f"{product.item_name} (available: {max(available, Decimal('0'))}, "
+                            f"requested: {requested}"
+                            + (f", {reserved[product.id]} reserved in other open PIs" if reserved.get(product.id) else "")
+                            + ")"
                         )
                 if insufficient_stock:
                     raise serializers.ValidationError({
@@ -909,7 +926,48 @@ class ProformaInvoiceUpdateSerializer(serializers.ModelSerializer):
 
         instance = self.instance
         items = data.get('items')
-        if instance.source != 'REQUISITION' or items is None:
+        if items is None:
+            return data
+
+        # ── Stock Sale: never let an edit oversell ────────────────────────────
+        # available = on-hand − qty reserved by OTHER open PIs (this PI's own lines
+        # are excluded, otherwise a PI would block itself on every re-save).
+        if instance.source == 'STOCK_SALE':
+            from inventory.stock_service import reserved_qty_map, ZERO
+
+            requested_by_product = {}
+            for item in items:
+                pid = item['product'].id if hasattr(item['product'], 'id') else item['product']
+                requested_by_product[pid] = requested_by_product.get(pid, Decimal('0')) + Decimal(str(item['quantity']))
+
+            reserved = reserved_qty_map(list(requested_by_product.keys()), exclude_pi_id=instance.id)
+
+            # This PI's own accepted lines already left stock, so add them back as
+            # headroom — an ACCEPTED PI can't be edited anyway, but stay safe.
+            own_deducted = {}
+            if instance.status == 'ACCEPTED':
+                for it in instance.items.all():
+                    own_deducted[it.product_id] = own_deducted.get(it.product_id, Decimal('0')) + Decimal(str(it.quantity))
+
+            problems = []
+            for pid, requested in requested_by_product.items():
+                product = Product.objects.get(id=pid)
+                available = (
+                    Decimal(str(product.current_stock))
+                    - reserved.get(product.id, ZERO)
+                    + own_deducted.get(product.id, Decimal('0'))
+                )
+                if available < requested:
+                    problems.append(
+                        f"{product.item_name} (available: {max(available, Decimal('0'))}, requested: {requested})"
+                    )
+            if problems:
+                raise serializers.ValidationError({
+                    'items': f"Insufficient stock for stock sale: {', '.join(problems)}"
+                })
+            return data
+
+        if instance.source != 'REQUISITION':
             return data
 
         incoming_reqs = data.get('requisitions')

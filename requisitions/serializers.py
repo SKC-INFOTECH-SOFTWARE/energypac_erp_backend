@@ -92,12 +92,118 @@ class RequisitionItemUpdateSerializer(serializers.ModelSerializer):
 # ── NEW: Update serializer with proper update() logic ──
 
 class RequisitionUpdateSerializer(serializers.ModelSerializer):
-    """Serializer for PUT / PATCH on a requisition — handles item sync correctly"""
+    """
+    PUT / PATCH on a requisition — keeps the vendor side in step.
+
+    A requisition can be edited even after it is assigned, but then every change
+    must flow down to the vendors, otherwise the assignment (and any quotation
+    already entered against it) would describe a requisition that no longer exists:
+
+        item added    → added to every vendor assignment of this requisition, and
+                        to any quotation already entered (rate 0 = "rate pending")
+        item removed  → removed from every assignment and quotation
+        qty changed   → assignment + quotation quantities follow; the vendor's rate
+                        is kept and the amount is recalculated
+
+    An item that a Purchase Order was already raised against cannot be removed —
+    that PO is a real commitment.
+    """
     items = RequisitionItemUpdateSerializer(many=True, required=False)
 
     class Meta:
         model = Requisition
         fields = ['requisition_date', 'remarks', 'items']
+
+    # ── vendor-side cascade helpers ──────────────────────────────────────────
+
+    @staticmethod
+    def _recompute_quotation_totals(quotation_ids):
+        from django.db.models import Sum
+        for quotation in VendorQuotation.objects.filter(id__in=set(quotation_ids)):
+            total = quotation.items.aggregate(t=Sum('amount'))['t'] or Decimal('0')
+            quotation.total_amount = total
+            quotation.save(update_fields=['total_amount'])
+
+    def _mirror_new_item_to_vendors(self, requisition, req_item):
+        """A new requisition item must reach every vendor already working on it."""
+        assignments = VendorRequisitionAssignment.objects.filter(
+            requisition=requisition
+        ).prefetch_related('quotations')
+
+        touched_quotations = []
+        for assignment in assignments:
+            vendor_item, _ = VendorRequisitionItem.objects.get_or_create(
+                assignment=assignment,
+                requisition_item=req_item,
+                defaults={'product': req_item.product, 'quantity': req_item.quantity},
+            )
+
+            # If the vendor has already submitted a quotation, the item would be
+            # unquotable (the quotation editor only edits existing lines), so add
+            # it there too with a zero rate for the buyer to fill in.
+            for quotation in assignment.quotations.all():
+                if not VendorQuotationItem.objects.filter(
+                    quotation=quotation, vendor_item=vendor_item
+                ).exists():
+                    VendorQuotationItem.objects.create(
+                        quotation=quotation,
+                        vendor_item=vendor_item,
+                        product=req_item.product,
+                        quantity=req_item.quantity,
+                        quoted_rate=Decimal('0'),
+                        remarks='Added after quotation — rate pending',
+                    )
+                    touched_quotations.append(quotation.id)
+
+        self._recompute_quotation_totals(touched_quotations)
+
+    def _remove_item_from_vendors(self, req_item):
+        """Drop the item from every assignment/quotation, unless a PO exists."""
+        from purchase_orders.models import PurchaseOrderItem
+
+        vendor_items = VendorRequisitionItem.objects.filter(requisition_item=req_item)
+        if not vendor_items.exists():
+            return
+
+        quotation_items = VendorQuotationItem.objects.filter(vendor_item__in=vendor_items)
+
+        # PurchaseOrderItem.quotation_item is PROTECTed — and a raised PO is a real
+        # commitment, so removing the item is genuinely not allowed here.
+        po_lines = PurchaseOrderItem.objects.filter(
+            quotation_item__in=quotation_items
+        ).select_related('po')
+        if po_lines.exists():
+            po_numbers = sorted({p.po.po_number for p in po_lines})
+            raise serializers.ValidationError({
+                'items': (
+                    f'Cannot remove "{req_item.product.item_name}" — a purchase order '
+                    f'({", ".join(po_numbers)}) has already been raised for it. '
+                    'Cancel that PO first.'
+                )
+            })
+
+        touched_quotations = list(quotation_items.values_list('quotation_id', flat=True))
+        quotation_items.delete()
+        vendor_items.delete()
+        self._recompute_quotation_totals(touched_quotations)
+
+    def _sync_quantity_to_vendors(self, req_item):
+        """Assignment + quotation quantities follow the requisition; rates stay."""
+        VendorRequisitionItem.objects.filter(
+            requisition_item=req_item
+        ).update(quantity=req_item.quantity)
+
+        touched_quotations = []
+        for q_item in VendorQuotationItem.objects.filter(
+            vendor_item__requisition_item=req_item
+        ):
+            q_item.quantity = req_item.quantity
+            q_item.save()  # recomputes amount = quantity × quoted_rate
+            touched_quotations.append(q_item.quotation_id)
+
+        self._recompute_quotation_totals(touched_quotations)
+
+    # ── update ───────────────────────────────────────────────────────────────
 
     def update(self, instance, validated_data):
         items_data = validated_data.pop('items', None)
@@ -116,25 +222,35 @@ class RequisitionUpdateSerializer(serializers.ModelSerializer):
 
                     if item_id and str(item_id) in existing_items:
                         item = existing_items[str(item_id)]
+                        old_product_id = item.product_id
+                        old_quantity = item.quantity
+
                         for attr, value in item_data.items():
                             setattr(item, attr, value)
                         item.save()
                         submitted_ids.add(str(item_id))
+
+                        # Swapping the product on an assigned line is really a
+                        # remove + add, so treat it as one.
+                        if item.product_id != old_product_id:
+                            stale = RequisitionItem(
+                                id=item.id, requisition=instance,
+                                product_id=old_product_id, quantity=old_quantity,
+                            )
+                            self._remove_item_from_vendors(stale)
+                            self._mirror_new_item_to_vendors(instance, item)
+                        elif item.quantity != old_quantity:
+                            self._sync_quantity_to_vendors(item)
                     else:
                         new_item = RequisitionItem.objects.create(
                             requisition=instance, **item_data
                         )
                         submitted_ids.add(str(new_item.id))
+                        self._mirror_new_item_to_vendors(instance, new_item)
 
                 for item_id, item in existing_items.items():
                     if item_id not in submitted_ids:
-                        has_vendor_items = VendorRequisitionItem.objects.filter(
-                            requisition_item=item
-                        ).exists()
-                        if has_vendor_items:
-                            raise serializers.ValidationError({
-                                'items': f'Cannot remove item "{item.product.item_name}" — it is assigned to a vendor.'
-                            })
+                        self._remove_item_from_vendors(item)
                         item.delete()
 
         return instance

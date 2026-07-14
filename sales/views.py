@@ -819,46 +819,73 @@ class ProformaInvoiceViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=['get'])
     def stock_items(self, request):
         """
-        GET /api/proforma-invoices/stock_items
-        Returns products with stock > 0 for direct/stock sale PI (no requisition).
-        Includes purchase history — which requisitions the product was bought under.
+        GET /api/proforma-invoices/stock_items[?exclude_pi=<pi_id>]
+
+        Items that were BOUGHT but NOT YET SOLD — i.e. sellable stock.
+
+            available = current_stock − qty locked in other open (DRAFT/SENT) PIs
+
+        Only items with available > 0 are returned, so the same unit can never be
+        promised on two PIs. `exclude_pi` skips the PI being edited, so its own
+        lines don't count against it.
+
+        Each row also carries what the item was actually bought for (last price,
+        weighted-average price, how many times, from whom).
         """
         from inventory.models import Product
-        from purchase_orders.models import PurchaseOrderItem
+        from inventory.stock_service import build_stock_rows, _purchase_lines
 
-        products = Product.objects.filter(
-            is_active=True, current_stock__gt=0
-        ).order_by('item_name')
+        exclude_pi = request.query_params.get('exclude_pi') or None
+
+        products = list(
+            Product.objects.filter(is_active=True, current_stock__gt=0).order_by('item_name')
+        )
+        rows = build_stock_rows(products, exclude_pi_id=exclude_pi)
+        rows = [r for r in rows if r['available_qty'] > 0]
+
+        # Per-item purchase trail (latest first, one entry per PO line).
+        sellable_ids = [r['product_id'] for r in rows]
+        history = {}
+        if sellable_ids:
+            for poi in reversed(_purchase_lines(sellable_ids)):
+                entries = history.setdefault(str(poi.product_id), [])
+                if len(entries) >= 5:
+                    continue
+                po = poi.po
+                entries.append({
+                    'requisition_number': po.requisition.requisition_number if po.requisition else '',
+                    'po_number': po.po_number,
+                    'po_date': po.po_date,
+                    'vendor_name': po.vendor.vendor_name if po.vendor else '',
+                    'qty': float(poi.quantity),
+                    'rate': float(poi.rate),
+                    'currency': po.currency,
+                })
+
+        master_rates = {str(p.id): float(p.rate) for p in products}
 
         result = []
-        for p in products:
-            po_items = PurchaseOrderItem.objects.filter(
-                product=p, is_received=True,
-            ).exclude(po__status='CANCELLED').select_related(
-                'po__requisition'
-            ).order_by('-po__po_date')
-
-            purchase_history = []
-            seen_reqs = set()
-            for poi in po_items:
-                req = poi.po.requisition
-                if req and req.id not in seen_reqs:
-                    seen_reqs.add(req.id)
-                    purchase_history.append({
-                        'requisition_number': req.requisition_number,
-                        'po_number': poi.po.po_number,
-                        'qty': float(poi.quantity),
-                        'rate': float(poi.rate),
-                    })
-
+        for r in rows:
             result.append({
-                'product_id': str(p.id),
-                'product_code': p.item_code,
-                'product_name': p.item_name,
-                'unit': p.unit,
-                'current_stock': float(p.current_stock),
-                'rate': float(p.rate),
-                'purchase_history': purchase_history,
+                'product_id': r['product_id'],
+                'product_code': r['item_code'],
+                'product_name': r['item_name'],
+                'hsn_code': r['hsn_code'],
+                'unit': r['unit'],
+                'current_stock': r['current_stock'],
+                'reserved_qty': r['reserved_qty'],
+                'available_qty': r['available_qty'],
+                'rate': master_rates.get(r['product_id'], 0.0),  # item-master selling rate (default)
+                'unit_cost': r['unit_cost'],                     # weighted-avg cost we paid
+                'last_purchase_rate': r['last_purchase_rate'],
+                'avg_purchase_rate': r['avg_purchase_rate'],
+                'last_purchase_date': r['last_purchase_date'],
+                'last_vendor_name': r['last_vendor_name'],
+                'purchase_count': r['purchase_count'],
+                'total_purchased_qty': r['total_purchased_qty'],
+                'total_sold_qty': r['total_sold_qty'],
+                'last_sale_price': r['last_sale_price'],
+                'purchase_history': history.get(r['product_id'], []),
             })
 
         return Response({'items': result})

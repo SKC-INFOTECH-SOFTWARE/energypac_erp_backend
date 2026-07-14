@@ -139,7 +139,12 @@
       "Bash(npx eslint *)",
       "Bash(echo \"=== exit $? ===\")",
       "Bash(echo \"EXIT: $?\")",
-      "Bash(echo \"LINT EXIT: $?\")"
+      "Bash(echo \"LINT EXIT: $?\")",
+      "Bash(echo \"EXIT=$?\")",
+      "Bash(echo \"LINT_EXIT=$?\")",
+      "Bash(echo \"LINT=$?\")",
+      "Bash(grep -n \"TableRow key\\\\|ViewIcon\\\\|handleView\\\\|align=\\\\\"center\\\\\">$\\\\|<TableCell align=\\\\\"center\\\\\"\" src/Pages/Vendor.jsx)",
+      "Bash(git stash *)"
     ]
   }
 }

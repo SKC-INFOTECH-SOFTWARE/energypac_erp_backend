@@ -16,6 +16,7 @@ from accounts.views import (
     UsersListForVerificationView,
 )
 from inventory.views import ProductViewSet
+from inventory.stock_views import StockViewSet
 from vendors.views import VendorViewSet
 from requisitions.views import RequisitionViewSet, VendorAssignmentViewSet
 from requisitions.views import VendorQuotationViewSet
@@ -119,6 +120,7 @@ from domestic.views import TaxInvoiceViewSet
 # Create router
 router = DefaultRouter(trailing_slash=False)
 router.register(r'products', ProductViewSet, basename='product')
+router.register(r'stock', StockViewSet, basename='stock')
 router.register(r'vendors', VendorViewSet, basename='vendor')
 router.register(r'requisitions', RequisitionViewSet, basename='requisition')
 router.register(r'vendor-assignments', VendorAssignmentViewSet, basename='vendor-assignment')
