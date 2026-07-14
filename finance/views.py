@@ -584,169 +584,32 @@ class AdvancePaymentViewSet(viewsets.ModelViewSet):
 # ═════════════════════════════════════════════════════════════════════════════
 
 def _to_inr(amount, currency, conversion_rate):
-    """Convert amount to INR using stored rate."""
-    if currency == 'INR' or not conversion_rate:
-        return float(amount or 0)
-    return float((amount or 0) * conversion_rate)
+    """
+    Convert to INR. A non-INR document with no stored rate is NOT valued as if it
+    were rupees (that turned a $185,000 PO into ₹185,000) — it contributes 0 and is
+    listed by core.currency.unconvertible_docs() so it gets fixed.
+    """
+    from core.currency import inr
+    return float(inr(amount, currency, conversion_rate))
 
 
 class ProfitLossReportView(APIView):
     """
-    P&L per requisition. All calculations in INR.
-    Optional: ?requisition=uuid
+    System P&L — see finance.pnl_service for the accounting model.
+
+    Revenue is ACCEPTED PIs only; cost is the COGS of what was actually sold plus
+    freight on both legs. Purchases not yet sold sit in `inventory_value_inr`.
+
+    Optional: ?requisition=uuid&fy=2026-2027
     """
     permission_classes = [FinanceModulePermission]
 
     def get(self, request):
-        req_id = request.query_params.get('requisition')
-        fy = request.query_params.get('fy')
-
-        requisitions = Requisition.objects.all()
-        if req_id:
-            requisitions = requisitions.filter(id=req_id)
-        if fy:
-            try:
-                fy_start_year = int(fy.split('-')[0])
-                fy_start = date_type(fy_start_year, 4, 1)
-                fy_end = date_type(fy_start_year + 1, 3, 31)
-                requisitions = requisitions.filter(
-                    requisition_date__gte=fy_start,
-                    requisition_date__lte=fy_end
-                )
-            except (ValueError, IndexError):
-                pass
-
-        results = []
-        for req in requisitions:
-            pos = PurchaseOrder.objects.filter(
-                requisition=req
-            ).exclude(status='CANCELLED')
-
-            po_total_inr = sum(
-                _to_inr(po.total_amount, po.currency, po.conversion_rate)
-                for po in pos
-            )
-
-            transport_po = float(TransportEntry.objects.filter(
-                purchase_order__requisition=req
-            ).exclude(status='CANCELLED').aggregate(
-                total=Sum('total_cost')
-            )['total'] or 0)
-
-            transport_pi = float(TransportEntry.objects.filter(
-                proforma_invoice__requisition=req
-            ).exclude(status='CANCELLED').aggregate(
-                total=Sum('total_cost')
-            )['total'] or 0)
-
-            transport_total = transport_po + transport_pi
-
-            # Freight recovered from the client on sell-side shipments (PI transport receipts)
-            transport_recovered = float(TransportEntry.objects.filter(
-                proforma_invoice__requisition=req
-            ).exclude(status='CANCELLED').aggregate(
-                total=Sum('amount_paid')
-            )['total'] or 0)
-
-            total_cost = po_total_inr + transport_total
-
-            pis = ProformaInvoice.objects.filter(
-                requisition=req
-            ).exclude(status='CANCELLED')
-
-            pi_total_inr = sum(
-                _to_inr(pi.grand_total, pi.currency, pi.conversion_rate)
-                for pi in pis
-            )
-
-            profit_loss = pi_total_inr - total_cost
-            margin = (profit_loss / pi_total_inr * 100) if pi_total_inr > 0 else 0
-
-            alert = None
-            if profit_loss < 0:
-                alert = 'LOSS'
-            elif margin < 10:
-                alert = 'LOW_MARGIN'
-
-            results.append({
-                'requisition_id': str(req.id),
-                'requisition_number': req.requisition_number,
-                'requisition_date': req.requisition_date.isoformat() if req.requisition_date else None,
-                'purchase_cost_inr': float(po_total_inr),
-                'transport_cost_inr': float(transport_total),
-                'transport_recovered_inr': float(transport_recovered),
-                'total_cost_inr': float(total_cost),
-                'sales_revenue_inr': float(pi_total_inr),
-                'profit_loss_inr': float(profit_loss),
-                'margin_percentage': round(float(margin), 2),
-                'alert': alert,
-                'is_stock_sale': False,
-            })
-
-        stock_sale_pis = ProformaInvoice.objects.filter(
-            requisition__isnull=True
-        ).exclude(status='CANCELLED')
-        if fy:
-            try:
-                fy_start_year = int(fy.split('-')[0])
-                fy_start = date_type(fy_start_year, 4, 1)
-                fy_end = date_type(fy_start_year + 1, 3, 31)
-                stock_sale_pis = stock_sale_pis.filter(
-                    pi_date__gte=fy_start, pi_date__lte=fy_end
-                )
-            except (ValueError, IndexError):
-                pass
-
-        if stock_sale_pis.exists():
-            stock_revenue_inr = 0.0
-            stock_cost_inr = 0.0
-            for pi in stock_sale_pis:
-                pi_rev = _to_inr(pi.grand_total, pi.currency, pi.conversion_rate)
-                stock_revenue_inr += pi_rev
-                for pii in pi.items.select_related('product').all():
-                    last_purchase = PurchaseOrderItem.objects.filter(
-                        product=pii.product, is_received=True,
-                    ).exclude(po__status='CANCELLED').select_related('po').order_by('-po__po_date').first()
-                    if last_purchase:
-                        rate = last_purchase.po.conversion_rate or Decimal('1')
-                        if last_purchase.po.currency == 'INR':
-                            rate = Decimal('1')
-                        stock_cost_inr += float(last_purchase.rate * pii.quantity * rate)
-
-            stock_pl = stock_revenue_inr - stock_cost_inr
-            stock_margin = (stock_pl / stock_revenue_inr * 100) if stock_revenue_inr > 0 else 0
-            results.append({
-                'requisition_id': None,
-                'requisition_number': 'STOCK SALES',
-                'requisition_date': None,
-                'purchase_cost_inr': float(stock_cost_inr),
-                'transport_cost_inr': 0,
-                'transport_recovered_inr': 0,
-                'total_cost_inr': float(stock_cost_inr),
-                'sales_revenue_inr': float(stock_revenue_inr),
-                'profit_loss_inr': float(stock_pl),
-                'margin_percentage': round(float(stock_margin), 2),
-                'alert': 'LOSS' if stock_pl < 0 else ('LOW_MARGIN' if stock_margin < 10 else None),
-                'is_stock_sale': True,
-            })
-
-        total_cost_all = sum(r['total_cost_inr'] for r in results)
-        total_revenue_all = sum(r['sales_revenue_inr'] for r in results)
-        total_pl = total_revenue_all - total_cost_all
-
-        return Response({
-            'currency': 'INR',
-            'summary': {
-                'total_purchase_cost': sum(r['purchase_cost_inr'] for r in results),
-                'total_transport_cost': sum(r['transport_cost_inr'] for r in results),
-                'total_transport_recovered': sum(r.get('transport_recovered_inr', 0) for r in results),
-                'total_cost': total_cost_all,
-                'total_revenue': total_revenue_all,
-                'total_profit_loss': total_pl,
-                'overall_margin': round((total_pl / total_revenue_all * 100), 2) if total_revenue_all > 0 else 0,
-            },
-            'requisitions': results,
-        })
+        from .pnl_service import compute_pnl
+        return Response(compute_pnl(
+            fy=request.query_params.get('fy'),
+            requisition_id=request.query_params.get('requisition'),
+        ))
 
 
 class RevenueAnalyticsView(APIView):
@@ -765,54 +628,29 @@ class RevenueAnalyticsView(APIView):
             return None, None
 
     def get(self, request):
+        from .pnl_service import compute_pnl
+
         fy = request.query_params.get('fy')
         f_trade = request.query_params.get('trade_type')
         f_source = request.query_params.get('source')
         fy_start, fy_end = self._fy_bounds(fy) if fy else (None, None)
 
-        deals = []  # one per requisition + one per pure stock-sale PI
-
-        # ── Requisition-backed deals ─────────────────────────────────────────
-        for req in Requisition.objects.all():
-            pis = list(ProformaInvoice.objects.filter(requisition=req).exclude(status='CANCELLED'))
-            if not pis:
-                continue
-            deal_date = req.requisition_date or min((p.pi_date for p in pis), default=None)
-            if fy_start and deal_date and not (fy_start <= deal_date <= fy_end):
-                continue
-            pos = PurchaseOrder.objects.filter(requisition=req).exclude(status='CANCELLED')
-            purchase = sum(_to_inr(po.total_amount, po.currency, po.conversion_rate) for po in pos)
-            transport = float(TransportEntry.objects.filter(
-                Q(purchase_order__requisition=req) | Q(proforma_invoice__requisition=req)
-            ).exclude(status='CANCELLED').aggregate(t=Sum('total_cost'))['t'] or 0)
-            revenue = sum(_to_inr(p.grand_total, p.currency, p.conversion_rate) for p in pis)
-            tts = {p.trade_type for p in pis}
-            srcs = {p.source for p in pis}
+        # Same numbers as /finance/profit-loss — one calculation, not two.
+        pnl = compute_pnl(fy=fy)
+        deals = []
+        for row in pnl['requisitions']:
+            raw_date = row['requisition_date'] or row.get('pi_date')
+            try:
+                deal_date = date_type.fromisoformat(raw_date) if raw_date else None
+            except (ValueError, TypeError):
+                deal_date = None
             deals.append({
-                'label': req.requisition_number, 'date': deal_date,
-                'revenue': revenue, 'cost': purchase + transport,
-                'trade_type': tts.pop() if len(tts) == 1 else 'MIXED',
-                'source': srcs.pop() if len(srcs) == 1 else 'MIXED',
-            })
-
-        # ── Pure stock-sale PIs (no requisition) ─────────────────────────────
-        for pi in ProformaInvoice.objects.filter(requisition__isnull=True).exclude(status='CANCELLED'):
-            deal_date = pi.pi_date
-            if fy_start and deal_date and not (fy_start <= deal_date <= fy_end):
-                continue
-            revenue = _to_inr(pi.grand_total, pi.currency, pi.conversion_rate)
-            cost = 0.0
-            for pii in pi.items.select_related('product').all():
-                lp = PurchaseOrderItem.objects.filter(
-                    product=pii.product, is_received=True,
-                ).exclude(po__status='CANCELLED').select_related('po').order_by('-po__po_date').first()
-                if lp:
-                    rate = Decimal('1') if lp.po.currency == 'INR' else (lp.po.conversion_rate or Decimal('1'))
-                    cost += float(lp.rate * pii.quantity * rate)
-            deals.append({
-                'label': pi.pi_number, 'date': deal_date,
-                'revenue': revenue, 'cost': cost,
-                'trade_type': pi.trade_type, 'source': pi.source or 'STOCK_SALE',
+                'label': row['requisition_number'],
+                'date': deal_date,
+                'revenue': row['sales_revenue_inr'],
+                'cost': row['total_cost_inr'],
+                'trade_type': row.get('trade_type') or 'DOMESTIC',
+                'source': row.get('source') or 'STOCK_SALE',
             })
 
         if f_trade in ('DOMESTIC', 'INTERNATIONAL'):
@@ -889,25 +727,27 @@ class RevenueAnalyticsView(APIView):
             'outstanding': round(float(svc_agg['outstanding'] or 0), 2),
         }
 
-        # ── Transport freight (informational) ────────────────────────────────
-        # Freight we PAY on purchases (buy) + on sales delivery (sell), and the
-        # portion of sell-side freight RECOVERED from clients (sell-side receipts).
+        # ── Transport freight ────────────────────────────────────────────────
+        # We pay the transporter on BOTH legs: to bring goods in against a PO, and
+        # to ship them out against a PI. Both are cost. `paid` is what has actually
+        # left the bank (it is NOT money recovered from the client — freight charged
+        # to the client is already inside the PI's prices).
         t_entries = TransportEntry.objects.exclude(status='CANCELLED')
         if fy_start:
             t_entries = t_entries.filter(dispatch_date__gte=fy_start, dispatch_date__lte=fy_end)
         buy_agg = t_entries.filter(purchase_order__isnull=False).aggregate(
             billed=Sum('total_cost'), paid=Sum('amount_paid'))
         sell_agg = t_entries.filter(proforma_invoice__isnull=False).aggregate(
-            billed=Sum('total_cost'), recovered=Sum('amount_paid'))
+            billed=Sum('total_cost'), paid=Sum('amount_paid'))
         freight_buy = float(buy_agg['billed'] or 0)
         freight_sell = float(sell_agg['billed'] or 0)
-        freight_recovered = float(sell_agg['recovered'] or 0)
+        freight_paid = float(buy_agg['paid'] or 0) + float(sell_agg['paid'] or 0)
         transport_block = {
-            'freight_paid_buy': round(freight_buy, 2),
-            'freight_paid_sell': round(freight_sell, 2),
-            'freight_paid_total': round(freight_buy + freight_sell, 2),
-            'freight_recovered_sell': round(freight_recovered, 2),
-            'net_freight_cost': round(freight_buy + freight_sell - freight_recovered, 2),
+            'freight_buy': round(freight_buy, 2),            # inbound — on Purchase Orders
+            'freight_sell': round(freight_sell, 2),          # outbound — on Proforma Invoices
+            'freight_billed_total': round(freight_buy + freight_sell, 2),
+            'freight_cash_paid': round(freight_paid, 2),     # actually paid to transporters
+            'freight_outstanding': round(freight_buy + freight_sell - freight_paid, 2),
         }
 
         # ── Top / bottom performers ──────────────────────────────────────────
@@ -921,6 +761,7 @@ class RevenueAnalyticsView(APIView):
         return Response({
             'currency': 'INR',
             'kpis': kpis,
+            'summary': pnl['summary'],          # money out, inventory, pipeline, cash
             'monthly': monthly_list,
             'by_trade_type': breakdown('trade_type', ['DOMESTIC', 'INTERNATIONAL']),
             'by_source': breakdown('source', ['REQUISITION', 'STOCK_SALE', 'DIRECT']),
@@ -928,6 +769,8 @@ class RevenueAnalyticsView(APIView):
             'service': service_block,
             'top_profit': [slim(d) for d in ranked[:5]],
             'top_loss': [slim(d) for d in reversed(ranked) if d['profit'] < 0][:5],
+            'fx_warnings': pnl['fx_warnings'],
+            'cost_warnings': pnl['cost_warnings'],
         })
 
 
@@ -1572,14 +1415,19 @@ class FinanceDashboardView(APIView):
             status='CANCELLED'
         ).aggregate(total=Sum('total_cost'))['total'] or Decimal('0')
 
-        # ── P&L Summary ──────────────────────────────────────────────────────
-        total_revenue_inr = total_pi_value
-        total_cost_inr = total_po_value + float(total_transport)
-        total_profit = total_revenue_inr - total_cost_inr
+        # ── P&L + cash flow — from the one shared calculation ─────────────────
+        from .pnl_service import compute_pnl
+        pnl = compute_pnl()['summary']
 
-        # ── Cash flow (all INR) ──────────────────────────────────────────────
-        total_inflow = total_received_from_clients
-        total_outflow = total_paid_to_vendors + float(total_transport)
+        total_revenue_inr = pnl['total_revenue']        # ACCEPTED PIs only
+        total_cost_inr = pnl['total_cost']              # COGS + freight (both legs)
+        total_profit = pnl['total_profit_loss']
+
+        # Cash that actually moved: client receipts land on bills, not on the PI,
+        # and freight leaves the bank as TransportPayment — the old dashboard
+        # missed the first and used accrued freight cost for the second.
+        total_inflow = pnl['cash_in']
+        total_outflow = pnl['cash_out']
 
         # ── Due dates ────────────────────────────────────────────────────────
         overdue_vendor_count = pos.filter(
@@ -1639,9 +1487,12 @@ class FinanceDashboardView(APIView):
                 'total_revenue': float(total_revenue_inr),
                 'total_cost': float(total_cost_inr),
                 'total_profit': float(total_profit),
-                'margin_percentage': round(
-                    float(total_profit / total_revenue_inr * 100), 2
-                ) if total_revenue_inr > 0 else 0,
+                'margin_percentage': pnl['overall_margin'],
+                # Money out on goods that have not been sold yet is inventory, not
+                # a loss — kept out of `total_cost` and reported on its own.
+                'total_money_out': pnl['total_money_out_inr'],
+                'inventory_value': pnl['inventory_value_inr'],
+                'pipeline_value': pnl['pipeline_value_inr'],
             },
             'cash_flow': {
                 'total_inflow': float(total_inflow),
@@ -1748,14 +1599,6 @@ class EnterpriseOverviewView(APIView):
         svc = drange(TaxInvoice.objects.filter(kind='SERVICE').exclude(status='CANCELLED'), 'invoice_date')
         service_in = float(svc.aggregate(s=Sum('amount_paid'))['s'] or 0)
         service_out_standing = float(svc.aggregate(s=Sum('balance'))['s'] or 0)
-        # 4. Freight recovered from clients (sell-side transport receipts, INR)
-        t_sell = drange(
-            TransportPayment.objects.filter(transport_entry__proforma_invoice__isnull=False)
-            .exclude(transport_entry__status='CANCELLED'),
-            'payment_date',
-        )
-        freight_recovered = float(t_sell.aggregate(s=Sum('amount'))['s'] or 0)
-
         # ── MONEY OUT ────────────────────────────────────────────────────────
         # 1. Payments to vendors (purchases) → convert to INR via PO rate
         po_pay = drange(
@@ -1766,23 +1609,33 @@ class EnterpriseOverviewView(APIView):
             _to_inr(p.amount, p.purchase_order.currency, p.purchase_order.conversion_rate)
             for p in po_pay
         )
-        # 2. Freight paid to transporters (buy-side, INR)
-        t_buy = drange(
-            TransportPayment.objects.filter(transport_entry__purchase_order__isnull=False)
-            .exclude(transport_entry__status='CANCELLED'),
+
+        # 2. Freight — the transporter is paid on BOTH legs: inbound against a PO
+        #    and outbound against a PI. Both are money leaving the bank.
+        #    (Sell-side payments used to be counted as "freight recovered" income,
+        #    which both invented revenue and hid the expense.)
+        t_pay = drange(
+            TransportPayment.objects.exclude(transport_entry__status='CANCELLED'),
             'payment_date',
         )
-        freight_paid_buy = float(t_buy.aggregate(s=Sum('amount'))['s'] or 0)
+        freight_paid_buy = float(
+            t_pay.filter(transport_entry__purchase_order__isnull=False)
+            .aggregate(s=Sum('amount'))['s'] or 0
+        )
+        freight_paid_sell = float(
+            t_pay.filter(transport_entry__proforma_invoice__isnull=False)
+            .aggregate(s=Sum('amount'))['s'] or 0
+        )
 
         money_in = {
             'goods_sales': round(float(goods_in), 2),
             'service': round(service_in, 2),
             'advances': round(advance_in, 2),
-            'freight_recovered': round(freight_recovered, 2),
         }
         money_out = {
             'purchases': round(float(purchases_out), 2),
-            'freight_paid': round(freight_paid_buy, 2),
+            'freight_in': round(freight_paid_buy, 2),    # bringing goods in
+            'freight_out': round(freight_paid_sell, 2),  # shipping goods to the client
         }
         total_in = round(sum(money_in.values()), 2)
         total_out = round(sum(money_out.values()), 2)

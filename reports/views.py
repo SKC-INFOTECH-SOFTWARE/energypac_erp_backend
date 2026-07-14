@@ -12,6 +12,7 @@ from requisitions.models import (Requisition, RequisitionItem,
                                 VendorRequisitionAssignment,
                                 VendorQuotation, VendorQuotationItem)
 from purchase_orders.models import PurchaseOrder, PurchaseOrderItem
+from core.currency import sum_inr, to_inr
 
 
 class ReportsBaseView(APIView):
@@ -241,7 +242,7 @@ class VendorPerformanceReportView(ReportsBaseView):
 
             total_pos = pos.count()
             completed_pos = pos.filter(status='COMPLETED').count()
-            total_po_value = pos.aggregate(Sum('total_amount'))['total_amount__sum'] or 0
+            total_po_value, _ = sum_inr(pos, 'total_amount')  # INR — POs can be in USD
 
             # Average quotation value
             avg_quotation = quotations.aggregate(Avg('total_amount'))['total_amount__avg'] or 0
@@ -395,7 +396,7 @@ class PurchaseOrderReportView(ReportsBaseView):
 
         # Summary
         total_pos = pos.count()
-        total_value = pos.aggregate(Sum('total_amount'))['total_amount__sum'] or 0
+        total_value, _ = sum_inr(pos, 'total_amount')  # INR — POs can be in USD
 
         pending = pos.filter(status='PENDING').count()
         partial = pos.filter(status='PARTIALLY_RECEIVED').count()
@@ -603,40 +604,40 @@ class SpendingAnalysisReportView(ReportsBaseView):
             po_date__lte=end_date
         ).select_related('vendor')
 
-        total_spending = pos.aggregate(Sum('total_amount'))['total_amount__sum'] or 0
+        # Every figure below is INR. Grouping in SQL with Sum('total_amount') added
+        # dollars onto rupees, so a $185,000 PO was reported as ₹185,000 of spend.
+        po_list = list(pos)
+        total_spending, _ = sum_inr(po_list, 'total_amount')
 
         if group_by == 'vendor':
-            # Group by vendor
-            vendor_spending = pos.values(
-                'vendor__vendor_name', 'vendor__vendor_code'
-            ).annotate(
-                total_spent=Sum('total_amount'),
-                po_count=Count('id')
-            ).order_by('-total_spent')
+            buckets = {}
+            for po in po_list:
+                key = (po.vendor.vendor_name, po.vendor.vendor_code)
+                b = buckets.setdefault(key, {'spent': Decimal('0'), 'count': 0})
+                b['spent'] += to_inr(po.total_amount, po.currency, po.conversion_rate)[0]
+                b['count'] += 1
 
-            breakdown = [{
-                'vendor_name': item['vendor__vendor_name'],
-                'vendor_code': item['vendor__vendor_code'],
-                'total_spent': float(item['total_spent']),
-                'purchase_orders': item['po_count'],
-                'percentage': round(float(item['total_spent']) / float(total_spending) * 100, 2) if total_spending > 0 else 0
-            } for item in vendor_spending]
+            breakdown = sorted([{
+                'vendor_name': name,
+                'vendor_code': code,
+                'total_spent': float(round(b['spent'], 2)),
+                'purchase_orders': b['count'],
+                'percentage': round(float(b['spent']) / float(total_spending) * 100, 2) if total_spending > 0 else 0
+            } for (name, code), b in buckets.items()], key=lambda r: -r['total_spent'])
 
         elif group_by == 'month':
-            # Group by month
-            from django.db.models.functions import TruncMonth
-            monthly_spending = pos.annotate(
-                month=TruncMonth('po_date')
-            ).values('month').annotate(
-                total_spent=Sum('total_amount'),
-                po_count=Count('id')
-            ).order_by('month')
+            buckets = {}
+            for po in po_list:
+                key = po.po_date.replace(day=1)
+                b = buckets.setdefault(key, {'spent': Decimal('0'), 'count': 0})
+                b['spent'] += to_inr(po.total_amount, po.currency, po.conversion_rate)[0]
+                b['count'] += 1
 
             breakdown = [{
-                'month': item['month'].strftime('%B %Y'),
-                'total_spent': float(item['total_spent']),
-                'purchase_orders': item['po_count']
-            } for item in monthly_spending]
+                'month': month.strftime('%B %Y'),
+                'total_spent': float(round(b['spent'], 2)),
+                'purchase_orders': b['count'],
+            } for month, b in sorted(buckets.items())]
 
         else:
             breakdown = []

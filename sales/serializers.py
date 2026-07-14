@@ -689,6 +689,14 @@ class ProformaInvoiceCreateSerializer(serializers.Serializer):
         from purchase_orders.models import PurchaseOrderItem
         from .models import ProformaInvoiceItem
 
+        # A non-INR PI without its rate is worthless downstream — every INR report
+        # would have to guess, and a $5,000 sale would silently read as ₹5,000.
+        if (data.get('currency') or 'INR') != 'INR' and not data.get('conversion_rate'):
+            raise serializers.ValidationError({
+                'conversion_rate': 'Required for a non-INR Proforma Invoice — '
+                                   'enter the INR rate applicable on the PI date.'
+            })
+
         items = data.get('items', [])
 
         # Assemble the full requisition set: explicit `requisitions` list plus the
@@ -924,7 +932,17 @@ class ProformaInvoiceUpdateSerializer(serializers.ModelSerializer):
         from purchase_orders.models import PurchaseOrderItem
         from .models import ProformaInvoiceItem
 
+        from core.currency import validate_rate
+
         instance = self.instance
+
+        # A PI's currency is fixed at creation, but the rate must never be cleared.
+        validate_rate(
+            data.get('currency', instance.currency),
+            data.get('conversion_rate', instance.conversion_rate),
+            'Proforma Invoice', 'the PI date',
+        )
+
         items = data.get('items')
         if items is None:
             return data

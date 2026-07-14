@@ -125,6 +125,13 @@ class PIBillCreateSerializer(serializers.Serializer):
             raise serializers.ValidationError(
                 "This PI is fully billed. No remaining quantity left to bill."
             )
+
+        # The bill inherits the PI's currency and rate. If the PI has no rate, the
+        # bill would enter the ledger unvaluable — fix the PI first.
+        from core.currency import validate_rate
+        validate_rate(pi.currency, pi.conversion_rate,
+                      f'Proforma Invoice ({pi.pi_number})',
+                      'the PI date — open the PI and set its conversion rate')
         return value
 
     def validate_items(self, value):
@@ -187,7 +194,7 @@ class PIBillCreateSerializer(serializers.Serializer):
                 email=validated_data.get('email', ''),
                 address=validated_data.get('address', ''),
                 currency=pi.currency,
-                conversion_rate=pi.conversion_rate,
+                conversion_rate=pi.conversion_rate,   # guarded in validate()
                 cgst_percentage=validated_data.get('cgst_percentage', 0),
                 sgst_percentage=validated_data.get('sgst_percentage', 0),
                 igst_percentage=validated_data.get('igst_percentage', 0),

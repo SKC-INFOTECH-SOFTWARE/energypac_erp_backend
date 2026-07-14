@@ -240,23 +240,34 @@ class PIBillViewSet(viewsets.ModelViewSet):
         search, status). Money totals exclude CANCELLED bills.
         GET /api/pi-bills/summary?bill_type=DOMESTIC&proforma_invoice__source=DIRECT
         """
+        from core.currency import to_inr
+
         qs = self.filter_queryset(self.get_queryset()).exclude(status='CANCELLED')
-        # INR-equivalent so international bills in mixed currencies sum meaningfully.
-        dec = DecimalField(max_digits=20, decimal_places=2)
-        rate = Coalesce('conversion_rate', Value(Decimal('1')),
-                        output_field=DecimalField(max_digits=20, decimal_places=4))
-        agg = qs.aggregate(
-            count=Count('id'),
-            total_billed=Sum(F('net_payable') * rate, output_field=dec),
-            total_received=Sum(F('amount_paid') * rate, output_field=dec),
-            total_outstanding=Sum(F('balance') * rate, output_field=dec),
-        )
+
+        # Coalesce(conversion_rate, 1) used to value a $10,000 bill with no rate at
+        # ₹10,000. A bill we cannot value is left out of the totals and counted, so
+        # the number is never quietly wrong.
+        billed = received = outstanding = Decimal('0')
+        counted = unvalued = 0
+        for bill in qs:
+            b, ok = to_inr(bill.net_payable, bill.currency, bill.conversion_rate)
+            if not ok:
+                unvalued += 1
+                continue
+            r, _ = to_inr(bill.amount_paid, bill.currency, bill.conversion_rate)
+            o, _ = to_inr(bill.balance, bill.currency, bill.conversion_rate)
+            billed += b
+            received += r
+            outstanding += o
+            counted += 1
+
         return Response({
-            'count': agg['count'] or 0,
+            'count': counted + unvalued,
             'currency': 'INR',  # totals are INR-equivalent
-            'total_billed': float(agg['total_billed'] or 0),
-            'total_received': float(agg['total_received'] or 0),
-            'total_outstanding': float(agg['total_outstanding'] or 0),
+            'total_billed': float(round(billed, 2)),
+            'total_received': float(round(received, 2)),
+            'total_outstanding': float(round(outstanding, 2)),
+            'unvalued_bills': unvalued,  # foreign-currency bills with no rate saved
         })
 
     @action(detail=False, methods=['get'])

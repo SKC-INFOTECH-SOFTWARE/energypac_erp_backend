@@ -96,10 +96,15 @@ class POItemUpdateSerializer(serializers.Serializer):
 
 class PurchaseOrderUpdateSerializer(serializers.ModelSerializer):
     items = POItemUpdateSerializer(many=True, required=False)
+    po_number = serializers.CharField(
+        required=False, allow_blank=True, max_length=50,
+        help_text="Leave unchanged to keep the current number, or type your own.",
+    )
 
     class Meta:
         model  = PurchaseOrder
         fields = [
+            'po_number',
             'po_date', 'subject', 'project_name', 'bill_to', 'ship_to',
             'terms_and_conditions', 'remarks', 'payment_due_date',
             'conversion_rate',
@@ -108,7 +113,31 @@ class PurchaseOrderUpdateSerializer(serializers.ModelSerializer):
             'items',
         ]
 
+    def validate(self, data):
+        from core.currency import validate_rate
+
+        instance = self.instance
+        rate = data.get('conversion_rate', instance.conversion_rate if instance else None)
+        currency = instance.currency if instance else 'INR'
+        validate_rate(currency, rate, 'purchase order', 'the PO date')
+        return data
+
+    def validate_po_number(self, value):
+        value = (value or '').strip()
+        if not value:
+            # Blank = "don't touch it"; the view keeps the existing number.
+            return ''
+        clash = PurchaseOrder.objects.filter(po_number=value)
+        if self.instance:
+            clash = clash.exclude(pk=self.instance.pk)
+        if clash.exists():
+            raise serializers.ValidationError(f'PO number "{value}" is already used by another purchase order.')
+        return value
+
     def update(self, instance, validated_data):
+        # An empty string means "keep the current number" — never blank it out.
+        if not validated_data.get('po_number'):
+            validated_data.pop('po_number', None)
         items_data = validated_data.pop('items', None)
 
         with transaction.atomic():
@@ -177,6 +206,10 @@ class GeneratePOSerializer(serializers.Serializer):
         help_text="List of quotation_item IDs"
     )
     po_date          = serializers.DateField()
+    po_number        = serializers.CharField(
+        required=False, allow_blank=True, max_length=50,
+        help_text="Leave blank to auto-generate (EEL/IND/<VENDOR>/<n>). Must be unique.",
+    )
     subject          = serializers.CharField(required=False, allow_blank=True, default='')
     project_name     = serializers.CharField(required=False, allow_blank=True, default='')
     bill_to          = serializers.CharField(required=False, allow_blank=True, default='')
@@ -221,6 +254,60 @@ class GeneratePOSerializer(serializers.Serializer):
 
         return value
 
+    def validate_po_number(self, value):
+        value = (value or '').strip()
+        if not value:
+            return ''   # blank = auto-generate, exactly as before
+        if PurchaseOrder.objects.filter(po_number=value).exists():
+            raise serializers.ValidationError(
+                f'PO number "{value}" is already used by another purchase order.'
+            )
+        return value
+
+    def validate(self, data):
+        """
+        A non-INR PO must carry the rate it was booked at — the PO screen is where
+        that rate is captured. Without it every INR report has to guess, and a
+        $185,000 PO silently reads as ₹185,000.
+        """
+        # One PO number can only belong to one PO. If the selection spans several
+        # vendors this call creates several POs, so a single typed number is refused.
+        if data.get('po_number'):
+            vendors = {
+                q.quotation.assignment.vendor_id
+                for q in VendorQuotationItem.objects.filter(
+                    id__in=data.get('selections', [])
+                ).select_related('quotation__assignment')
+                if q.quotation and q.quotation.assignment
+            }
+            if len(vendors) > 1:
+                raise serializers.ValidationError({
+                    'po_number': (
+                        'The selected items span several vendors, so several POs will be '
+                        'created. Leave the PO number blank (each gets its own), or select '
+                        'one vendor at a time.'
+                    )
+                })
+
+        if data.get('conversion_rate'):
+            return data
+
+        foreign = {
+            q.quotation.currency
+            for q in VendorQuotationItem.objects.filter(
+                id__in=data.get('selections', [])
+            ).select_related('quotation')
+            if q.quotation and q.quotation.currency != 'INR'
+        }
+        if foreign:
+            raise serializers.ValidationError({
+                'conversion_rate': (
+                    f"Required — the selected quotation(s) are in {', '.join(sorted(foreign))}. "
+                    "Enter the INR rate applicable on the PO date."
+                )
+            })
+        return data
+
     def create(self, validated_data):
         selections  = validated_data['selections']
         requisition = Requisition.objects.get(id=validated_data['requisition'])
@@ -247,6 +334,8 @@ class GeneratePOSerializer(serializers.Serializer):
             po = PurchaseOrder.objects.create(
                 requisition      = requisition,
                 vendor           = vendor,
+                # Blank falls through to the model's auto-numbering, unchanged.
+                po_number        = validated_data.get('po_number', '') or '',
                 po_date          = validated_data['po_date'],
                 subject          = validated_data.get('subject', ''),
                 project_name     = validated_data.get('project_name', ''),

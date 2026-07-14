@@ -30,20 +30,11 @@ class Requisition(models.Model):
 
     def save(self, *args, **kwargs):
         if not self.requisition_number:
-            # Generate: EEL/2026/001
+            from core.numbering import next_number
             year = datetime.now().year
-            last_req = Requisition.objects.filter(
-                requisition_number__startswith=f'EEL/{year}/'
-            ).order_by('-requisition_number').first()
-
-            if last_req:
-                last_num = int(last_req.requisition_number.split('/')[-1])
-                new_num = last_num + 1
-            else:
-                new_num = 1
-
-            self.requisition_number = f'EEL/{year}/{new_num:03d}'
-
+            self.requisition_number = next_number(
+                Requisition, 'requisition_number', f'EEL/{year}/', 3
+            )
         super().save(*args, **kwargs)
 
     def __str__(self):
@@ -184,19 +175,11 @@ class VendorQuotation(models.Model):
 
     def save(self, *args, **kwargs):
         if not self.quotation_number:
+            from core.numbering import next_number
             year = datetime.now().year
-            last_q = VendorQuotation.objects.filter(
-                quotation_number__startswith=f'VQ/{year}/'
-            ).order_by('-quotation_number').first()
-
-            if last_q:
-                last_num = int(last_q.quotation_number.split('/')[-1])
-                new_num = last_num + 1
-            else:
-                new_num = 1
-
-            self.quotation_number = f'VQ/{year}/{new_num:04d}'
-
+            self.quotation_number = next_number(
+                VendorQuotation, 'quotation_number', f'VQ/{year}/', 4
+            )
         super().save(*args, **kwargs)
 
     def __str__(self):

@@ -27,12 +27,11 @@ from sales.models import ProformaInvoice
 
 
 def _to_inr(amount, currency, rate):
-    """Convert a PO/PI amount to INR using the stored conversion rate.
-    Transport/freight is already INR, so only the trade-side amount needs converting."""
-    amt = amount or Decimal('0')
-    if currency and currency != 'INR' and rate:
-        return amt * rate
-    return amt
+    """Convert a PO/PI amount to INR using the rate stored on that document.
+    Freight itself is already INR — only the trade-side amount needs converting.
+    A non-INR document with no rate is not passed off as rupees; see core.currency."""
+    from core.currency import inr
+    return inr(amount, currency, rate)
 
 
 class TransporterViewSet(viewsets.ModelViewSet):
@@ -53,7 +52,8 @@ class TransporterViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['get'])
     def ledger(self, request, pk=None):
         """Full ledger for one transporter: every entry with billed / paid / balance,
-        split by BUY (we pay) and SELL (we recover from client)."""
+        split by leg. We PAY the transporter on both — BUY is freight to bring goods
+        in against a PO, SELL is freight to ship them out against a PI."""
         transporter = self.get_object()
         entries = transporter.transport_entries.exclude(
             status='CANCELLED'
@@ -890,6 +890,16 @@ class TransportDashboardView(APIView):
             'purchase_order__vendor', 'created_by'
         ).order_by('-created_at')[:10]
 
+        # The transporter is paid on both legs, so freight cost splits in two:
+        # inbound (against a PO) and outbound (against a PI). One lump total hid that.
+        inbound = all_entries.filter(purchase_order__isnull=False).aggregate(
+            billed=Sum('total_cost'), paid=Sum('amount_paid'))
+        outbound = all_entries.filter(proforma_invoice__isnull=False).aggregate(
+            billed=Sum('total_cost'), paid=Sum('amount_paid'))
+        inbound_cost = float(inbound['billed'] or 0)
+        outbound_cost = float(outbound['billed'] or 0)
+        total_paid = float(inbound['paid'] or 0) + float(outbound['paid'] or 0)
+
         return Response({
             'summary': {
                 'total_entries': total_entries,
@@ -897,6 +907,10 @@ class TransportDashboardView(APIView):
                 'in_transit': in_transit,
                 'delivered': delivered,
                 'total_cost': float(total_cost),
+                'inbound_cost': inbound_cost,     # freight to bring goods in (PO)
+                'outbound_cost': outbound_cost,   # freight to ship goods out (PI)
+                'total_paid': total_paid,
+                'total_outstanding': float(total_cost) - total_paid,
             },
             'cost_by_type': [
                 {
@@ -912,24 +926,30 @@ class TransportDashboardView(APIView):
 
 class TransportPaymentsFinanceView(APIView):
     """
-    Finance-facing view of transporter payments — both sides.
+    Finance-facing view of transporter payments — both legs.
 
-    BUY side  = freight we OWE transporters on Purchase Orders (a payable).
-    SELL side = freight we RECOVER from clients on Proforma Invoices (a receivable).
+    The transporter is PAID on both legs, so both are a payable:
+        INBOUND  (BUY)  — freight to bring the goods in against a Purchase Order.
+        OUTBOUND (SELL) — freight to ship the goods out against a Proforma Invoice.
 
-    Drives the Finance > Transport Payments page and feeds revenue/cost tracking.
-    Read-only data is visible to BOTH Transport and Finance; recording a payment
-    (separate endpoint) stays Finance-only.
+    (The outbound leg used to be described as freight "recovered from the client",
+    i.e. a receivable. It is not: the client's freight is already built into the
+    PI's prices, while this money leaves our bank. Treating it as income made the
+    company's freight cost look smaller than it is.)
+
+    The summary always covers BOTH legs — the `side` filter only narrows the rows,
+    never the totals.
     """
     permission_classes = [TransportOrFinancePermission]
 
     def get(self, request):
         side = request.query_params.get('side')  # BUY | SELL | None(all)
 
-        entries = TransportEntry.objects.exclude(status='CANCELLED').select_related(
+        all_entries = TransportEntry.objects.exclude(status='CANCELLED').select_related(
             'purchase_order__vendor', 'proforma_invoice', 'transporter',
         ).prefetch_related('payments')
 
+        entries = all_entries
         if side == 'BUY':
             entries = entries.filter(purchase_order__isnull=False)
         elif side == 'SELL':
@@ -937,6 +957,13 @@ class TransportPaymentsFinanceView(APIView):
 
         buy = {'billed': Decimal('0'), 'paid': Decimal('0'), 'balance': Decimal('0'), 'count': 0}
         sell = {'billed': Decimal('0'), 'paid': Decimal('0'), 'balance': Decimal('0'), 'count': 0}
+        for e in all_entries:
+            bucket = buy if e.direction == 'BUY' else sell
+            bucket['billed'] += e.total_cost
+            bucket['paid'] += e.amount_paid
+            bucket['balance'] += e.balance
+            bucket['count'] += 1
+
         rows = []
         for e in entries.order_by('-created_at'):
             direction = e.direction
@@ -946,11 +973,6 @@ class TransportPaymentsFinanceView(APIView):
             party = (e.purchase_order.vendor.vendor_name if e.purchase_order else
                      (e.proforma_invoice.consignee.split('\n')[0].strip()
                       if e.proforma_invoice and e.proforma_invoice.consignee else '—'))
-            bucket = buy if direction == 'BUY' else sell
-            bucket['billed'] += e.total_cost
-            bucket['paid'] += e.amount_paid
-            bucket['balance'] += e.balance
-            bucket['count'] += 1
             rows.append({
                 'id': str(e.id),
                 'transport_number': e.transport_number,
@@ -973,10 +995,16 @@ class TransportPaymentsFinanceView(APIView):
                 'balance': float(b['balance']), 'count': b['count'],
             }
 
+        # Both legs are money we pay out, so the company's freight cost is their SUM.
+        total_billed = buy['billed'] + sell['billed']
+        total_paid = buy['paid'] + sell['paid']
+
         return Response({
             'side': side or 'ALL',
-            'buy': fmt(buy),
-            'sell': fmt(sell),
-            'net_cost_to_company': float(buy['billed'] - sell['billed']),
+            'buy': fmt(buy),      # inbound — on Purchase Orders
+            'sell': fmt(sell),    # outbound — on Proforma Invoices
+            'total_freight_cost': float(total_billed),
+            'total_paid': float(total_paid),
+            'total_outstanding': float(buy['balance'] + sell['balance']),
             'entries': rows,
         })

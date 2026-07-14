@@ -144,7 +144,8 @@
       "Bash(echo \"LINT_EXIT=$?\")",
       "Bash(echo \"LINT=$?\")",
       "Bash(grep -n \"TableRow key\\\\|ViewIcon\\\\|handleView\\\\|align=\\\\\"center\\\\\">$\\\\|<TableCell align=\\\\\"center\\\\\"\" src/Pages/Vendor.jsx)",
-      "Bash(git stash *)"
+      "Bash(git stash *)",
+      "Read(//tmp/**)"
     ]
   }
 }

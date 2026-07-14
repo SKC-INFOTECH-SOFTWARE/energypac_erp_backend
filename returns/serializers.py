@@ -59,10 +59,8 @@ class SalesReturnSerializer(serializers.ModelSerializer):
         return obj.approved_by.get_full_name() if obj.approved_by else None
 
     def get_total_return_amount_inr(self, obj):
-        rate = obj.conversion_rate or Decimal('1')
-        if obj.currency == 'INR':
-            rate = Decimal('1')
-        return float(obj.total_return_amount * rate)
+        from core.currency import inr
+        return float(inr(obj.total_return_amount, obj.currency, obj.conversion_rate))
 
 
 class SalesReturnItemCreateSerializer(serializers.Serializer):
@@ -139,7 +137,7 @@ class SalesReturnCreateSerializer(serializers.Serializer):
                 proforma_invoice=pi,
                 created_by=created_by,
                 currency=pi.currency,
-                conversion_rate=pi.conversion_rate or Decimal('1'),
+                conversion_rate=pi.conversion_rate,
                 **validated_data,
             )
             for item_data in items_data:
@@ -213,10 +211,8 @@ class PurchaseReturnSerializer(serializers.ModelSerializer):
         return obj.approved_by.get_full_name() if obj.approved_by else None
 
     def get_total_return_amount_inr(self, obj):
-        rate = obj.conversion_rate or Decimal('1')
-        if obj.currency == 'INR':
-            rate = Decimal('1')
-        return float(obj.total_return_amount * rate)
+        from core.currency import inr
+        return float(inr(obj.total_return_amount, obj.currency, obj.conversion_rate))
 
 
 class PurchaseReturnItemCreateSerializer(serializers.Serializer):
@@ -293,7 +289,7 @@ class PurchaseReturnCreateSerializer(serializers.Serializer):
                 purchase_order=po,
                 created_by=created_by,
                 currency=po.currency,
-                conversion_rate=po.conversion_rate or Decimal('1'),
+                conversion_rate=po.conversion_rate,
                 **validated_data,
             )
             for item_data in items_data:

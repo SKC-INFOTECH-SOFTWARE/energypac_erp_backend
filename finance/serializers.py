@@ -89,9 +89,8 @@ class POFinanceSummarySerializer(serializers.ModelSerializer):
         return float(max(computed, Decimal('0')))
 
     def get_total_amount_inr(self, obj):
-        if obj.currency == 'INR' or not obj.conversion_rate:
-            return float(obj.total_amount)
-        return float(obj.total_amount * obj.conversion_rate)
+        from core.currency import inr
+        return float(inr(obj.total_amount, obj.currency, obj.conversion_rate))
 
     def get_is_overdue(self, obj):
         if not obj.payment_due_date:
@@ -165,9 +164,8 @@ class PIFinanceSummarySerializer(serializers.ModelSerializer):
         return float(max(obj.grand_total - obj.amount_received, Decimal('0')))
 
     def get_grand_total_inr(self, obj):
-        if obj.currency == 'INR' or not obj.conversion_rate:
-            return float(obj.grand_total)
-        return float(obj.grand_total * obj.conversion_rate)
+        from core.currency import inr
+        return float(inr(obj.grand_total, obj.currency, obj.conversion_rate))
 
     def get_payment_count(self, obj):
         return obj.pi_payments.count()
@@ -210,6 +208,9 @@ class AdvancePaymentSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         pi = validated_data['proforma_invoice']
+        from core.currency import validate_rate
+        validate_rate(pi.currency, pi.conversion_rate, f'Proforma Invoice ({pi.pi_number})',
+                      'the PI date — open the PI and set it')
         validated_data['currency'] = pi.currency
         validated_data['conversion_rate'] = pi.conversion_rate
         return super().create(validated_data)

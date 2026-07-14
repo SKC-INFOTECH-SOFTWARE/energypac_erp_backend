@@ -161,17 +161,22 @@ class DashboardStatsView(APIView):
             quotation_date__gte=last_30_days
         ).count()
 
-        # Total quotation value
-        total_value = VendorQuotation.objects.aggregate(
+        # Quotation value. A plain Sum('total_amount') added dollars onto rupees —
+        # VendorQuotation stores a currency but no conversion rate, so a non-INR
+        # quotation genuinely cannot be valued in INR. It is reported separately
+        # instead of being folded in at 1:1.
+        total_value = VendorQuotation.objects.filter(currency='INR').aggregate(
             total=Sum('total_amount')
         )['total'] or 0
+        foreign_quotations = VendorQuotation.objects.exclude(currency='INR').count()
 
         return {
             'total_quotations': total_quotations,
             'selected_quotations': selected,
             'pending_selection': pending,
             'recent_quotations_30_days': recent,
-            'total_quotation_value': float(total_value)
+            'total_quotation_value': float(total_value),   # INR quotations only
+            'foreign_currency_quotations': foreign_quotations,
         }
 
     def _get_po_stats(self, last_30_days, last_7_days):
@@ -192,15 +197,14 @@ class DashboardStatsView(APIView):
             po_date__gte=last_7_days
         ).count()
 
-        # Total PO value
-        total_value = PurchaseOrder.objects.aggregate(
-            total=Sum('total_amount')
-        )['total'] or 0
+        # PO values in INR. A plain Sum('total_amount') added USD straight onto INR.
+        from core.currency import sum_inr
 
-        # Pending PO value
-        pending_value = PurchaseOrder.objects.filter(
-            status__in=['PENDING', 'PARTIALLY_RECEIVED']
-        ).aggregate(total=Sum('total_amount'))['total'] or 0
+        total_value, _ = sum_inr(PurchaseOrder.objects.all(), 'total_amount')
+        pending_value, _ = sum_inr(
+            PurchaseOrder.objects.filter(status__in=['PENDING', 'PARTIALLY_RECEIVED']),
+            'total_amount',
+        )
 
         return {
             'total_purchase_orders': total_pos,

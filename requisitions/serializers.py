@@ -109,10 +109,27 @@ class RequisitionUpdateSerializer(serializers.ModelSerializer):
     that PO is a real commitment.
     """
     items = RequisitionItemUpdateSerializer(many=True, required=False)
+    requisition_number = serializers.CharField(
+        required=False, allow_blank=True, max_length=50,
+        help_text="Leave blank to keep the current number, or type your own (must be unique).",
+    )
 
     class Meta:
         model = Requisition
-        fields = ['requisition_date', 'remarks', 'items']
+        fields = ['requisition_number', 'requisition_date', 'remarks', 'items']
+
+    def validate_requisition_number(self, value):
+        value = (value or '').strip()
+        if not value:
+            return ''   # blank = keep the existing number
+        clash = Requisition.objects.filter(requisition_number=value)
+        if self.instance:
+            clash = clash.exclude(pk=self.instance.pk)
+        if clash.exists():
+            raise serializers.ValidationError(
+                f'Requisition number "{value}" is already used by another requisition.'
+            )
+        return value
 
     # ── vendor-side cascade helpers ──────────────────────────────────────────
 
@@ -207,6 +224,10 @@ class RequisitionUpdateSerializer(serializers.ModelSerializer):
 
     def update(self, instance, validated_data):
         items_data = validated_data.pop('items', None)
+
+        # An empty string means "keep the current number" — never blank it out.
+        if not validated_data.get('requisition_number'):
+            validated_data.pop('requisition_number', None)
 
         with transaction.atomic():
             for attr, value in validated_data.items():
@@ -384,6 +405,13 @@ class VendorQuotationSerializer(serializers.ModelSerializer):
     items = VendorQuotationItemSerializer(many=True, read_only=True)
     vendor_name = serializers.CharField(source='assignment.vendor.vendor_name', read_only=True)
     vendor_code = serializers.CharField(source='assignment.vendor.vendor_code', read_only=True)
+    # The quotation screens showed GST / PAN / bank fields that were never sent —
+    # they always rendered blank. Expose them.
+    gst_number = serializers.CharField(source='assignment.vendor.gst_number', read_only=True)
+    pan_number = serializers.CharField(source='assignment.vendor.pan_number', read_only=True)
+    bank_name = serializers.CharField(source='assignment.vendor.bank_name', read_only=True)
+    bank_account_number = serializers.CharField(source='assignment.vendor.bank_account_number', read_only=True)
+    ifsc_code = serializers.CharField(source='assignment.vendor.ifsc_code', read_only=True)
     requisition_number = serializers.CharField(source='assignment.requisition.requisition_number', read_only=True)
     created_by_name = serializers.CharField(source='created_by.get_full_name', read_only=True)
     total_items = serializers.SerializerMethodField()
@@ -392,6 +420,7 @@ class VendorQuotationSerializer(serializers.ModelSerializer):
         model = VendorQuotation
         fields = [
             'id', 'quotation_number', 'assignment', 'vendor_name', 'vendor_code',
+            'gst_number', 'pan_number', 'bank_name', 'bank_account_number', 'ifsc_code',
             'requisition_number', 'quotation_date', 'reference_number',
             'validity_date', 'payment_terms', 'delivery_terms', 'remarks',
             'currency', 'total_amount',

@@ -296,7 +296,11 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
 
         po.revision_number += 1
         po.is_revised = True
-        if not po.po_number.endswith('R'):
+
+        # A revision normally marks the number with an 'R'. If the user typed their
+        # own PO number, that is the number they want — don't decorate it.
+        user_number = (serializer.validated_data.get('po_number') or '').strip()
+        if not user_number and not po.po_number.endswith('R'):
             po.po_number = po.po_number + 'R'
 
         serializer.save()

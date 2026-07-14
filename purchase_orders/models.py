@@ -20,7 +20,10 @@ class PurchaseOrder(models.Model):
     ]
 
     id           = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    po_number    = models.CharField(max_length=50, unique=True, editable=False)
+    po_number    = models.CharField(
+        max_length=50, unique=True, blank=True,
+        help_text="Auto-generated (EEL/IND/<VENDOR>/<n>) when left blank; can be overridden while editing."
+    )
     requisition  = models.ForeignKey(Requisition, on_delete=models.PROTECT)
     vendor       = models.ForeignKey(Vendor, on_delete=models.PROTECT)
     po_date      = models.DateField()
@@ -127,25 +130,15 @@ class PurchaseOrder(models.Model):
     def save(self, *args, **kwargs):
         if not self.po_number:
             import re
+            from core.numbering import next_number
+
             vendor_name = self.vendor.vendor_name.strip()
             vendor_prefix = re.split(r'\s+', vendor_name)[0].upper()
-            prefix = f'EEL/IND/{vendor_prefix}'
-
-            last_po = PurchaseOrder.objects.filter(
-                po_number__startswith=prefix + '/'
-            ).order_by('-created_at').first()
-
-            if last_po:
-                num_part = last_po.po_number.split('/')[-1]
-                num_part = num_part.rstrip('R')
-                try:
-                    new_num = int(num_part) + 1
-                except ValueError:
-                    new_num = 100
-            else:
-                new_num = 100
-
-            self.po_number = f'{prefix}/{new_num}'
+            # Numbering starts at 100 for this vendor and skips anything already
+            # taken — including a hand-typed number or a revision's 'R' suffix.
+            self.po_number = next_number(
+                PurchaseOrder, 'po_number', f'EEL/IND/{vendor_prefix}/', 1, start=100
+            )
 
         super().save(*args, **kwargs)
 

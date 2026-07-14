@@ -121,20 +121,14 @@ class ProformaInvoice(models.Model):
 
     def save(self, *args, **kwargs):
         if not self.pi_number:
+            from core.numbering import next_number
             year = datetime.now().year
-            prefix = f'EEL/IND/PI/{year}'
-            last_pi = ProformaInvoice.objects.filter(
-                pi_number__startswith=prefix + '/'
-            ).order_by('-created_at').first()
-
-            if last_pi:
-                num_part = last_pi.pi_number.split('/')[-1]
-                num_part = num_part.rstrip('R')
-                new_num = int(num_part) + 1
-            else:
-                new_num = 1
-
-            self.pi_number = f'{prefix}/{new_num:04d}'
+            # Highest number in use + 1, skipping anything already taken — the old
+            # "last created row + 1" could re-issue a number after a hand-typed one
+            # or a revision's 'R' suffix.
+            self.pi_number = next_number(
+                ProformaInvoice, 'pi_number', f'EEL/IND/PI/{year}/', 4
+            )
 
         super().save(*args, **kwargs)
 
