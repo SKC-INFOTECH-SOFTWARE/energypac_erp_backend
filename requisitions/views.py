@@ -12,6 +12,7 @@ from .serializers import (
     RequisitionUpdateSerializer,       # ← NEW
     VendorRequisitionAssignmentSerializer,
     VendorAssignmentCreateSerializer,
+    VendorAssignmentUpdateSerializer,
     VendorQuotationSerializer,
     VendorQuotationCreateSerializer,
     VendorQuotationUpdateSerializer,   # ← NEW
@@ -66,9 +67,15 @@ class RequisitionViewSet(viewsets.ModelViewSet):
     def items(self, request, pk=None):
         """Get all items for a specific requisition"""
         requisition = self.get_object()
-        from .serializers import RequisitionItemSerializer
+        from .serializers import RequisitionItemSerializer, assigned_qty_map
+        # `exclude_assignment` lets the edit-assignment screen leave its own
+        # lines out of the "already assigned" tally, so remaining_qty is correct.
+        exclude_id = request.query_params.get('exclude_assignment') or None
+        amap = assigned_qty_map(requisition, exclude_assignment_id=exclude_id)
         items = requisition.items.all()
-        serializer = RequisitionItemSerializer(items, many=True)
+        serializer = RequisitionItemSerializer(
+            items, many=True, context={'assigned_map': amap}
+        )
         return Response({
             'requisition_number': requisition.requisition_number,
             'total_items': items.count(),
@@ -168,6 +175,8 @@ class VendorAssignmentViewSet(viewsets.ModelViewSet):
     def get_serializer_class(self):
         if self.action == 'create':
             return VendorAssignmentCreateSerializer
+        if self.action in ('update', 'partial_update'):
+            return VendorAssignmentUpdateSerializer
         return VendorRequisitionAssignmentSerializer
 
     def perform_create(self, serializer):

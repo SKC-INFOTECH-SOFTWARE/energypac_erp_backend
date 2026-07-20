@@ -8,18 +8,85 @@ from inventory.serializers import ProductSerializer
 from vendors.serializers import VendorSerializer
 from vendors.models import Vendor
 
+
+def assigned_qty_map(requisition, exclude_assignment_id=None):
+    """
+    How much of each requisition item is already assigned across ALL vendor
+    assignments of this requisition.
+
+    Returns {requisition_item_id (str): total qty already assigned (Decimal)}.
+    Pass exclude_assignment_id to leave a given assignment out of the tally
+    (used when editing that assignment, so its own lines don't count against it).
+    """
+    from django.db.models import Sum
+    qs = VendorRequisitionItem.objects.filter(assignment__requisition=requisition)
+    if exclude_assignment_id:
+        qs = qs.exclude(assignment_id=exclude_assignment_id)
+    return {
+        str(row['requisition_item_id']): (row['total'] or Decimal('0'))
+        for row in qs.values('requisition_item_id').annotate(total=Sum('quantity'))
+    }
+
+
+def validate_assignment_item_quantities(requisition, items):
+    """
+    Structural guard shared by create/update: every line must belong to the
+    requisition, have a positive quantity, and appear only once within THIS
+    assignment. Raises DRF ValidationError on the first problem.
+
+    Note: there is deliberately NO ceiling on the total quantity requested across
+    vendors. Assigning an item to a vendor means "please quote it", not "allocate
+    this much of the buy" — so the SAME item can be sent to many vendors at full
+    quantity for competitive quoting, and can also be split (subset of items /
+    reduced qty) per vendor. Both are valid.
+    """
+    req_items = {str(ri.id): ri for ri in requisition.items.all()}
+    seen = set()
+    for entry in items:
+        rid = str(entry.get('requisition_item') or entry.get('id') or '')
+        if rid not in req_items:
+            raise serializers.ValidationError(
+                {'items': f'Item {rid} does not belong to this requisition.'})
+        if rid in seen:
+            raise serializers.ValidationError(
+                {'items': f'{req_items[rid].product.item_name} is listed twice.'})
+        seen.add(rid)
+        try:
+            qty = Decimal(str(entry.get('quantity')))
+        except Exception:
+            raise serializers.ValidationError(
+                {'items': f'Invalid quantity for {req_items[rid].product.item_name}.'})
+        if qty <= 0:
+            raise serializers.ValidationError(
+                {'items': f'Quantity must be greater than 0 for '
+                          f'{req_items[rid].product.item_name}.'})
+
+
 class RequisitionItemSerializer(serializers.ModelSerializer):
     """Serializer for requisition items"""
     product_details = ProductSerializer(source='product', read_only=True)
     product_name = serializers.CharField(source='product.item_name', read_only=True)
     product_code = serializers.CharField(source='product.item_code', read_only=True)
     unit = serializers.CharField(source='product.unit', read_only=True)
+    # Informational only: how much of this item is already requested from OTHER
+    # vendors. Populated when the caller passes an `assigned_map` in context
+    # (the requisition `items` endpoint); null otherwise. It is NOT a cap —
+    # the same item can be requested from any number of vendors for competitive
+    # quoting — it's just a hint shown next to the assignment checkbox.
+    assigned_qty = serializers.SerializerMethodField()
 
     class Meta:
         model = RequisitionItem
         fields = ['id', 'product', 'product_name', 'product_code', 'unit',
-                  'product_details', 'quantity', 'remarks', 'created_at']
+                  'product_details', 'quantity', 'assigned_qty',
+                  'remarks', 'created_at']
         read_only_fields = ['id', 'created_at']
+
+    def get_assigned_qty(self, obj):
+        amap = self.context.get('assigned_map')
+        if amap is None:
+            return None
+        return amap.get(str(obj.id), Decimal('0'))
 
 class RequisitionSerializer(serializers.ModelSerializer):
     """Serializer for viewing requisitions"""
@@ -359,6 +426,8 @@ class VendorAssignmentCreateSerializer(serializers.Serializer):
             raise serializers.ValidationError(
                 "This vendor is already assigned to this requisition."
             )
+        requisition = Requisition.objects.get(id=data['requisition'])
+        validate_assignment_item_quantities(requisition, data['items'])
         return data
 
     def create(self, validated_data):
@@ -384,6 +453,63 @@ class VendorAssignmentCreateSerializer(serializers.Serializer):
         requisition.is_assigned = True
         requisition.save()
         return assignment
+
+
+class VendorAssignmentUpdateSerializer(serializers.ModelSerializer):
+    """
+    Edit an existing vendor assignment. Remarks can always change. The set of
+    items (and their quantities) can be changed too, but only while no quotation
+    exists for the assignment — once quoted, the lines are locked so quotation/PO
+    references stay intact. The same over-assignment guard applies, excluding this
+    assignment's own lines from the tally.
+    """
+    items = serializers.ListField(
+        child=serializers.DictField(), required=False,
+        help_text="List of items with requisition_item and quantity"
+    )
+
+    class Meta:
+        model = VendorRequisitionAssignment
+        fields = ['remarks', 'items']
+
+    def to_representation(self, instance):
+        return VendorRequisitionAssignmentSerializer(instance).data
+
+    def validate(self, data):
+        instance = self.instance
+        if 'items' in data:
+            if instance.quotations.exists():
+                raise serializers.ValidationError(
+                    "Items cannot be changed after a quotation exists for this "
+                    "assignment."
+                )
+            if not data['items']:
+                raise serializers.ValidationError(
+                    {'items': 'At least one item is required.'})
+            validate_assignment_item_quantities(instance.requisition, data['items'])
+        return data
+
+    @transaction.atomic
+    def update(self, instance, validated_data):
+        items_data = validated_data.pop('items', None)
+        instance.remarks = validated_data.get('remarks', instance.remarks)
+        instance.save()
+
+        if items_data is not None:
+            # No quotation references these lines (guarded in validate), so a
+            # clean replace is safe.
+            instance.items.all().delete()
+            for item_data in items_data:
+                req_item = RequisitionItem.objects.get(
+                    id=item_data['requisition_item'])
+                VendorRequisitionItem.objects.create(
+                    assignment=instance,
+                    requisition_item=req_item,
+                    product=req_item.product,
+                    quantity=item_data['quantity'],
+                )
+        return instance
+
 
 class VendorQuotationItemSerializer(serializers.ModelSerializer):
     """Serializer for quotation items"""
